@@ -1,0 +1,5 @@
+@SETLOCAL
+@SET "DOTNET_SDK=C:\dotnet-sdk-8.0.423-win-x64"
+@SET "PATH=%DOTNET_SDK%;%PATH%"
+@cmd /k
+@ENDLOCAL
