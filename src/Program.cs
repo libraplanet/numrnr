@@ -73,6 +73,16 @@ namespace numrnr {
             public KEYBDINPUT ki;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RAWKEYBOARD {
+            public ushort MakeCode;
+            public ushort Flags;
+            public ushort Reserved;
+            public ushort VKey;
+            public uint Message;
+            public IntPtr ExtraInformation;
+        }
+
         public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
@@ -101,11 +111,15 @@ namespace numrnr {
         public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
     }
 
+    static class Const {
+        public const string APP_NAME = "Num R'n'R";
+    }
+
     /// <summary>
     /// RawInputReceiver.
     /// </summary>
     class RawInputReceiver : NativeWindow, IDisposable {
-        public event Action<IntPtr>? OnDeviceInput;
+        public event Action<IntPtr, ushort, uint, IntPtr>? OnDeviceInput;
 
         public RawInputReceiver() {
             this.CreateHandle(new CreateParams());
@@ -130,7 +144,9 @@ namespace numrnr {
                             Win32Api.RAWINPUTHEADER header = (Win32Api.RAWINPUTHEADER)Marshal.PtrToStructure(buffer, typeof(Win32Api.RAWINPUTHEADER));
                             // keyboard (1)
                             if (header.dwType == 1) {
-                                OnDeviceInput?.Invoke(header.hDevice);
+                                IntPtr keyboardPtr = buffer + Marshal.SizeOf(typeof(Win32Api.RAWINPUTHEADER));
+                                Win32Api.RAWKEYBOARD rawKeyboard = (Win32Api.RAWKEYBOARD)Marshal.PtrToStructure(keyboardPtr, typeof(Win32Api.RAWKEYBOARD));
+                                OnDeviceInput?.Invoke(header.hDevice, rawKeyboard.VKey, rawKeyboard.Message, rawKeyboard.ExtraInformation);
                             }
                         }
                     } finally {
@@ -151,6 +167,7 @@ namespace numrnr {
             this.SuspendLayout();
 
             this.Size = new Size(600, 400);
+            this.Text = $"{Const.APP_NAME} - Log";
             this.textBox.Multiline = true;
             this.textBox.ReadOnly = true;
             this.textBox.ForeColor = Color.Black;
@@ -196,7 +213,7 @@ namespace numrnr {
         private IntPtr _hookId = IntPtr.Zero;
         private RawInputReceiver? _rawInputReceiver = null;
         private IntPtr _lastDeviceHandle = IntPtr.Zero;
-        private bool _isChageDevice = false;
+        private bool _isChagedDevice = false;
         private Dictionary<IntPtr, bool> _deviceNumlockMap = new Dictionary<IntPtr, bool>();
 
         /// <summary>
@@ -227,7 +244,7 @@ namespace numrnr {
                 //notifyIcon
                 this.notifyIcon.ContextMenuStrip = this.contextMenuStrip;
                 this.notifyIcon.Visible = true;
-                this.notifyIcon.Text = "Num R'n'R";
+                this.notifyIcon.Text = Const.APP_NAME;
                 this.notifyIcon.Icon = SystemIcons.Application;
                 this.notifyIcon.DoubleClick += new EventHandler(delegate (object sender, EventArgs e) {
                 });
@@ -286,17 +303,34 @@ namespace numrnr {
             this.contextMenuStrip.ResumeLayout(false);
 
             this._rawInputReceiver = new RawInputReceiver();
-            this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice) {
-                this._isChageDevice = (_lastDeviceHandle != IntPtr.Zero) && (_lastDeviceHandle != hDevice) ;
-                this._lastDeviceHandle = hDevice;
-                bool isNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
-                // Device別NumLock辞書に追加
-                this._deviceNumlockMap[hDevice] = isNumLockOn;
-                this.logForm.AppendLog($"[WM_INPUT] Dev: 0x{_lastDeviceHandle.ToInt64():X8}, numLock: {isNumLockOn}");
+            this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice, ushort vkey, uint message, IntPtr extraInfo) {
+                if (extraInfo != Win32Api.INSIGNIA_REINJECT) {
+                    bool isChagedDevice = this._isChagedDevice = (_lastDeviceHandle != IntPtr.Zero) && (_lastDeviceHandle != hDevice);
+                    bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+                    if(vkey == Win32Api.VK_NUMLOCK) {
+                        if (message == Win32Api.WM_KEYDOWN) {
+                            // NUM LOCKが押下されたので、先読み
+                            this._deviceNumlockMap[hDevice] = !curIsNumLockOn;
+                            this._lastDeviceHandle = hDevice;
+                        }
+                    } else {
+                        this.logForm.AppendLog($"[WM_INPUT] Dev: 0x{hDevice.ToInt64():X8}, numLock: {curIsNumLockOn}");
+ 
+                        if(isChagedDevice && this._deviceNumlockMap.ContainsKey(hDevice)) {
+                            bool expectedIsNumLockOn = this._deviceNumlockMap[hDevice];
+                            if(curIsNumLockOn != expectedIsNumLockOn) {
+                                ToggleNumLock();
+                                curIsNumLockOn = expectedIsNumLockOn;
+                            }
+                        }
+                        this._deviceNumlockMap[hDevice] = curIsNumLockOn;
+                        this._lastDeviceHandle = hDevice;
+                    }
+                }
             };
 
             this._proc = HookCallback;
-            SetHook();
+            // SetHook();
         }
 
         /// <summary>
@@ -312,6 +346,30 @@ namespace numrnr {
                     0
                 );
             }
+        }
+        
+        /// <summary>
+        /// ToggleNumLock
+        /// </summary>
+        private void ToggleNumLock() {
+            Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
+            // Key Down
+            inputs[0].type = Win32Api.INPUT_KEYBOARD;
+            inputs[0].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
+            inputs[0].ki.wScan = 0;
+            inputs[0].ki.dwFlags = 0;
+            inputs[0].ki.time = 0;
+            inputs[0].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
+
+            // Key Up
+            inputs[1].type = Win32Api.INPUT_KEYBOARD;
+            inputs[1].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
+            inputs[1].ki.wScan = 0;
+            inputs[1].ki.dwFlags = Win32Api.KEYEVENTF_KEYUP;
+            inputs[1].ki.time = 0;
+            inputs[1].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
+
+            Win32Api.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Win32Api.INPUT)));
         }
 
         /// <summary>
@@ -329,29 +387,12 @@ namespace numrnr {
                             // 何もしない
                             this.logForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: 0x{_lastDeviceHandle.ToInt64():X8}");
                         } else {
-                            this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: 0x{_lastDeviceHandle.ToInt64():X8} isChageDevice: {_isChageDevice}");
-                            if(this._isChageDevice && _deviceNumlockMap.ContainsKey(_lastDeviceHandle)) {
+                            this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: 0x{_lastDeviceHandle.ToInt64():X8} isChagedDevice: {_isChagedDevice}");
+                            if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(_lastDeviceHandle)) {
                                 bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
-                                bool oldIsNumLockOn = _deviceNumlockMap[_lastDeviceHandle];
-                                if(curIsNumLockOn != oldIsNumLockOn) {
-                                    Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
-                                    // Key Down
-                                    inputs[0].type = Win32Api.INPUT_KEYBOARD;
-                                    inputs[0].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
-                                    inputs[0].ki.wScan = 0;
-                                    inputs[0].ki.dwFlags = 0;
-                                    inputs[0].ki.time = 0;
-                                    inputs[0].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
-
-                                    // Key Up
-                                    inputs[1].type = Win32Api.INPUT_KEYBOARD;
-                                    inputs[1].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
-                                    inputs[1].ki.wScan = 0;
-                                    inputs[1].ki.dwFlags = Win32Api.KEYEVENTF_KEYUP;
-                                    inputs[1].ki.time = 0;
-                                    inputs[1].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
-
-                                    Win32Api.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Win32Api.INPUT)));
+                                bool expectedIsNumLockOn = this._deviceNumlockMap[_lastDeviceHandle];
+                                if(curIsNumLockOn != expectedIsNumLockOn) {
+                                    ToggleNumLock();
                                 }
                             }
                         }
