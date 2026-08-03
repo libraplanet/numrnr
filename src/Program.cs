@@ -1,8 +1,12 @@
 using System;
+using System.Text;
+using System.Linq;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using System.Collections.Generic;
+using System.Reflection;
 
 namespace numrnr {
     /// <summary>
@@ -15,47 +19,165 @@ namespace numrnr {
         public const int WM_SYSKEYDOWN = 0x0104;
         public const int WM_SYSKEYUP = 0x0105;
 
-        // <summary>
-        // キーボードフック構造体
-        // </summary>
+        public const int VK_NUMLOCK = 0x90;
+
+        // Raw Input 用定義
+        public const int WM_INPUT = 0x00FF;
+        public const int RIDEV_INPUTSINK = 0x00000100;
+        public const uint RID_INPUT = 0x10000003;
+
+        // SendInput 用定義
+        public const uint INPUT_KEYBOARD = 1;
+        public const uint KEYEVENTF_KEYUP = 0x0002;
+        public static readonly IntPtr INSIGNIA_REINJECT = new IntPtr(0x4E554D52); // "NUMR" マーク
+
         [StructLayout(LayoutKind.Sequential)]
         public struct KBDLLHOOKSTRUCT {
-            public uint vkCode;      // 仮想キーコード
-            public uint scanCode;    // ハードウェアスキャンコード
-            public uint flags;       // イベントフラグ
-            public uint time;        // タイムスタンプ
-            public IntPtr dwExtraInfo; // 拡張情報
+            public uint vkCode;
+            public uint scanCode;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
         }
 
-        // <summary>
-        // コールバックデリゲート定義
-        // </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RAWINPUTDEVICE {
+            public ushort usUsagePage;
+            public ushort usUsage;
+            public uint dwFlags;
+            public IntPtr hwndTarget;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RAWINPUTHEADER {
+            public uint dwType;
+            public uint dwSize;
+            public IntPtr hDevice;
+            public IntPtr wParam;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KEYBDINPUT {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        public struct INPUT {
+            [FieldOffset(0)]
+            public uint type;
+            [FieldOffset(4)]
+            public KEYBDINPUT ki;
+        }
+
         public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
-        // <summary>
-        // フック設定関数
-        // </summary>
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
-        // <summary>
-        // フック解除関数
-        // </summary>
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool UnhookWindowsHookEx(IntPtr hhk);
 
-        // <summary>
-        // 次のフック呼び出し関数
-        // </summary>
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
-        // <summary>
-        // モジュールハンドル取得関数
-        // </summary>
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, ExactSpelling = true)]
+        public static extern short GetKeyState(int keyCode);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, uint cbSize);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint GetRawInputData(IntPtr hRawInput, uint uiCommand, IntPtr pData, ref uint pcbSize, uint cbSizeHeader);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+    }
+
+    /// <summary>
+    /// RawInputReceiver.
+    /// </summary>
+    class RawInputReceiver : NativeWindow, IDisposable {
+        public event Action<IntPtr>? OnDeviceInput;
+
+        public RawInputReceiver() {
+            this.CreateHandle(new CreateParams());
+
+            // キーボードの Raw Input 登録
+            Win32Api.RAWINPUTDEVICE[] rid = new Win32Api.RAWINPUTDEVICE[1];
+            rid[0].usUsagePage = 0x01; // Generic Desktop Controls
+            rid[0].usUsage = 0x06;     // Keyboard
+            rid[0].dwFlags = Win32Api.RIDEV_INPUTSINK; // バックグラウンドでも受信
+            rid[0].hwndTarget = this.Handle;
+
+            Win32Api.RegisterRawInputDevices(rid, (uint)rid.Length, (uint)Marshal.SizeOf(typeof(Win32Api.RAWINPUTDEVICE)));
+        }
+        protected override void WndProc(ref Message m) {
+            if (m.Msg == Win32Api.WM_INPUT) {
+                uint dwSize = 0;
+                Win32Api.GetRawInputData(m.LParam, Win32Api.RID_INPUT, IntPtr.Zero, ref dwSize, (uint)Marshal.SizeOf(typeof(Win32Api.RAWINPUTHEADER)));
+                if (dwSize > 0) {
+                    IntPtr buffer = Marshal.AllocHGlobal((int)dwSize);
+                    try {
+                        if (Win32Api.GetRawInputData(m.LParam, Win32Api.RID_INPUT, buffer, ref dwSize, (uint)Marshal.SizeOf(typeof(Win32Api.RAWINPUTHEADER))) == dwSize) {
+                            Win32Api.RAWINPUTHEADER header = (Win32Api.RAWINPUTHEADER)Marshal.PtrToStructure(buffer, typeof(Win32Api.RAWINPUTHEADER));
+                            // keyboard (1)
+                            if (header.dwType == 1) {
+                                OnDeviceInput?.Invoke(header.hDevice);
+                            }
+                        }
+                    } finally {
+                        Marshal.FreeHGlobal(buffer);
+                    }
+                }
+            }
+            base.WndProc(ref m);
+        }
+        public void Dispose() {
+            this.DestroyHandle();
+        }
+    }
+
+    class LogForm : Form {
+        private TextBox textBox = new TextBox();
+        public LogForm() {
+            this.SuspendLayout();
+
+            this.Size = new Size(600, 400);
+            this.textBox.Multiline = true;
+            this.textBox.ReadOnly = true;
+            this.textBox.ForeColor = Color.Black;
+            this.textBox.ScrollBars = ScrollBars.Both;
+            this.textBox.WordWrap = false;
+            this.textBox.Dock = DockStyle.Fill;
+            this.Controls.Add(this.textBox);
+            this.FormClosing += delegate(object sender, FormClosingEventArgs e) {
+                if (e.CloseReason == CloseReason.UserClosing) {
+                    e.Cancel = true;
+                    this.Hide();
+                }
+            };
+
+            this.ResumeLayout(false);
+        }
+        public void AppendLog(string message) {
+#if DEBUG
+            if (this.InvokeRequired) {
+                this.Invoke(new Action<string>(AppendLog), message);
+            } else {
+                const int MAX_LINES = 500;
+                string logLine = $"[{DateTime.Now:yyyy/MM/dd HH:mm:ss.fff}] {message}";
+                this.textBox.Lines = this.textBox.Lines.Prepend(logLine).Take(MAX_LINES).ToArray();
+            }
+#endif
+        }
     }
 
     /// <summary>
@@ -64,11 +186,18 @@ namespace numrnr {
     class Program : IDisposable {
         NotifyIcon notifyIcon = new NotifyIcon();
         ContextMenuStrip contextMenuStrip = new ContextMenuStrip();
-        ToolStripMenuItem toolStripMenuItemSetting = new ToolStripMenuItem();
+        ToolStripMenuItem toolStripMenuItemLog = new ToolStripMenuItem();
+        ToolStripMenuItem toolStripMenuItemInfo = new ToolStripMenuItem();
         ToolStripMenuItem toolStripMenuItemExit = new ToolStripMenuItem();
+
+        LogForm logForm;
 
         private Win32Api.LowLevelKeyboardProc _proc;
         private IntPtr _hookId = IntPtr.Zero;
+        private RawInputReceiver? _rawInputReceiver = null;
+        private IntPtr _lastDeviceHandle = IntPtr.Zero;
+        private bool _isChageDevice = false;
+        private Dictionary<IntPtr, bool> _deviceNumlockMap = new Dictionary<IntPtr, bool>();
 
         /// <summary>
         ///  The main entry point for the application.
@@ -91,6 +220,10 @@ namespace numrnr {
             this.contextMenuStrip.SuspendLayout();
             //design
             {
+                // LogForm
+                this.logForm = new LogForm();
+                this.logForm.Hide();
+
                 //notifyIcon
                 this.notifyIcon.ContextMenuStrip = this.contextMenuStrip;
                 this.notifyIcon.Visible = true;
@@ -99,11 +232,44 @@ namespace numrnr {
                 this.notifyIcon.DoubleClick += new EventHandler(delegate (object sender, EventArgs e) {
                 });
 
-                //toolStripMenuItemSetting
-                this.toolStripMenuItemSetting.Text = "Settings (&S)";
-                //this.toolStripMenuItemSetting.Font = new Font(this.toolStripMenuItemSetting.Font, FontStyle.Bold);
-                this.toolStripMenuItemSetting.Enabled = false;
-                this.toolStripMenuItemSetting.Click += new EventHandler(delegate (object sender, EventArgs e) {
+                //toolStripMenuItemLog
+                this.toolStripMenuItemLog.Text = "Log (&L)";
+                //this.toolStripMenuItemLog.Font = new Font(this.toolStripMenuItemLog.Font, FontStyle.Bold);
+                this.toolStripMenuItemLog.Click += new EventHandler(delegate (object sender, EventArgs e) {
+                    if(this.logForm.Visible) {
+                        this.logForm.Hide();
+                    } else {
+                        this.logForm.Show();
+                        this.logForm.Activate();
+                    }
+                });
+#if DEBUG
+                this.toolStripMenuItemLog.Enabled = true;
+#else
+                this.toolStripMenuItemLog.Enabled = false;
+#endif
+
+                //toolStripMenuItemInfo
+                this.toolStripMenuItemInfo.Text = "Info (&I)";
+                this.toolStripMenuItemInfo.Click += new EventHandler(delegate (object sender, EventArgs e) {
+                    AssemblyConfigurationAttribute? configAttr = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyConfigurationAttribute>();
+                    string buildConfig = configAttr?.Configuration ?? "Unknown";
+                    string appName = "Num R'n'R";
+                    StringBuilder sb = new StringBuilder();
+                    sb.AppendLine($"-- {appName} --");
+                    sb.AppendLine("Independent NumLock state manager for multiple keyboards.");
+                    sb.AppendLine("");
+                    sb.AppendLine("version: v.0.0.0.0.0.0.0.0.0.1");
+                    sb.AppendLine("auther: libraplanet");
+                    sb.AppendLine("license: MIT License");
+                    sb.AppendLine($"build: {buildConfig}");
+
+                    MessageBox.Show(
+                        sb.ToString(),
+                        appName,
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
                 });
 
                 //toolStripMenuItemExit
@@ -113,12 +279,23 @@ namespace numrnr {
                 });
 
                 //contextMenuStrip
-                this.contextMenuStrip.Items.Add(this.toolStripMenuItemSetting);
+                this.contextMenuStrip.Items.Add(this.toolStripMenuItemLog);
+                this.contextMenuStrip.Items.Add(this.toolStripMenuItemInfo);
                 this.contextMenuStrip.Items.Add(this.toolStripMenuItemExit);
             }
             this.contextMenuStrip.ResumeLayout(false);
 
-            _proc = HookCallback;
+            this._rawInputReceiver = new RawInputReceiver();
+            this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice) {
+                this._isChageDevice = (_lastDeviceHandle != IntPtr.Zero) && (_lastDeviceHandle != hDevice) ;
+                this._lastDeviceHandle = hDevice;
+                bool isNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+                // Device別NumLock辞書に追加
+                this._deviceNumlockMap[hDevice] = isNumLockOn;
+                this.logForm.AppendLog($"[WM_INPUT] Dev: 0x{_lastDeviceHandle.ToInt64():X8}, numLock: {isNumLockOn}");
+            };
+
+            this._proc = HookCallback;
             SetHook();
         }
 
@@ -128,9 +305,9 @@ namespace numrnr {
         private void SetHook() {
             using(Process curProcess = Process.GetCurrentProcess())
             using(ProcessModule curModule = curProcess.MainModule) {
-                _hookId = Win32Api.SetWindowsHookEx(
+                this._hookId = Win32Api.SetWindowsHookEx(
                     Win32Api.WH_KEYBOARD_LL,
-                    _proc,
+                    this._proc,
                     Win32Api.GetModuleHandle(curModule.ModuleName),
                     0
                 );
@@ -145,6 +322,40 @@ namespace numrnr {
                 int wmMessage = wParam.ToInt32();
                 if (wmMessage == Win32Api.WM_KEYDOWN || wmMessage == Win32Api.WM_SYSKEYDOWN) {
                     Win32Api.KBDLLHOOKSTRUCT hookStruct = (Win32Api.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Win32Api.KBDLLHOOKSTRUCT));
+
+                    if (hookStruct.dwExtraInfo != Win32Api.INSIGNIA_REINJECT) {
+                        Keys key = (Keys)hookStruct.vkCode;
+                        if (key == Keys.NumLock) {
+                            // 何もしない
+                            this.logForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: 0x{_lastDeviceHandle.ToInt64():X8}");
+                        } else {
+                            this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: 0x{_lastDeviceHandle.ToInt64():X8} isChageDevice: {_isChageDevice}");
+                            if(this._isChageDevice && _deviceNumlockMap.ContainsKey(_lastDeviceHandle)) {
+                                bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+                                bool oldIsNumLockOn = _deviceNumlockMap[_lastDeviceHandle];
+                                if(curIsNumLockOn != oldIsNumLockOn) {
+                                    Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
+                                    // Key Down
+                                    inputs[0].type = Win32Api.INPUT_KEYBOARD;
+                                    inputs[0].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
+                                    inputs[0].ki.wScan = 0;
+                                    inputs[0].ki.dwFlags = 0;
+                                    inputs[0].ki.time = 0;
+                                    inputs[0].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
+
+                                    // Key Up
+                                    inputs[1].type = Win32Api.INPUT_KEYBOARD;
+                                    inputs[1].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
+                                    inputs[1].ki.wScan = 0;
+                                    inputs[1].ki.dwFlags = Win32Api.KEYEVENTF_KEYUP;
+                                    inputs[1].ki.time = 0;
+                                    inputs[1].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
+
+                                    Win32Api.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Win32Api.INPUT)));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             return Win32Api.CallNextHookEx(_hookId, nCode, wParam, lParam);
@@ -154,10 +365,12 @@ namespace numrnr {
         /// Dispose
         /// </summary>
         public void Dispose() {
-            if (_hookId != IntPtr.Zero) {
-                Win32Api.UnhookWindowsHookEx(_hookId);
-                _hookId = IntPtr.Zero;
+            if (this._hookId != IntPtr.Zero) {
+                Win32Api.UnhookWindowsHookEx(this._hookId);
+                this._hookId = IntPtr.Zero;
             }
+
+            _rawInputReceiver?.Dispose();
 
             this.notifyIcon.Visible = false;
             this.notifyIcon.Dispose();
