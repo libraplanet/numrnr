@@ -111,6 +111,9 @@ namespace numrnr {
         public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
     }
 
+    /// <summary>
+    /// Const.
+    /// </summary>
     static class Const {
         public const string APP_NAME = "Num R'n'R";
     }
@@ -162,19 +165,94 @@ namespace numrnr {
     }
 
     class LogForm : Form {
-        private TextBox textBox = new TextBox();
+        public static readonly int MAX_HISTORIES = 8;
+        private TextBox[] textBoxHistoryDevices = new TextBox[MAX_HISTORIES];
+        private TextBox[] textBoxHistoryStatus = new TextBox[MAX_HISTORIES];
+        private TextBox textBoxLog;
+        private GroupBox groupBoxHistories;
+        private GroupBox groupBoxLogs;
+
+        public HistoriesIndexer Histories {get;}
+
+        public class HistoriesIndexer {
+            private readonly LogForm _logForm;
+            public HistoriesIndexer(LogForm logForm) {
+                this._logForm = logForm;
+            }
+            public (string device, string status) this[int index] {
+                get {
+                    if((index >= 0) && (index < MAX_HISTORIES)) {
+                        return (this._logForm.textBoxHistoryDevices[index].Text, this._logForm.textBoxHistoryStatus[index].Text);
+                    } else {
+                        throw new ArgumentOutOfRangeException(nameof(index));
+                    }
+                }
+                set {
+                    if((index >= 0) && (index < MAX_HISTORIES)) {
+                        this._logForm.textBoxHistoryDevices[index].Text = value.device;
+                        this._logForm.textBoxHistoryStatus[index].Text = value.status;
+                    } else {
+                        throw new ArgumentOutOfRangeException(nameof(index));
+                    }
+                }
+            }
+        }
+
         public LogForm() {
             this.SuspendLayout();
 
-            this.Size = new Size(600, 400);
+            this.Histories = new HistoriesIndexer(this);
+
+            this.Size = new Size(600, 480);
             this.Text = $"{Const.APP_NAME} - Log";
-            this.textBox.Multiline = true;
-            this.textBox.ReadOnly = true;
-            this.textBox.ForeColor = Color.Black;
-            this.textBox.ScrollBars = ScrollBars.Both;
-            this.textBox.WordWrap = false;
-            this.textBox.Dock = DockStyle.Fill;
-            this.Controls.Add(this.textBox);
+
+            this.groupBoxHistories = new GroupBox();
+            this.groupBoxHistories.Text = "histories";
+            this.groupBoxHistories.Location = new Point(10, 10);
+            this.groupBoxHistories.Size = new Size(560, 100);
+            this.groupBoxHistories.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            this.Controls.Add(this.groupBoxHistories);
+
+            this.groupBoxLogs = new GroupBox();
+            this.groupBoxLogs.Text = "logs";
+            this.groupBoxLogs.Location = new Point(10, 110);
+            this.groupBoxLogs.Size = new Size(560, 320);
+            this.groupBoxLogs.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+            this.Controls.Add(this.groupBoxLogs);
+
+            for(int i = 0; i < MAX_HISTORIES; i++) {
+                Label label = new Label();
+                label.Text = $"[{i}]:";
+                label.Location = new Point(10 + ((i % 2) * 270), 17 + ((i / 2) * 20));
+                label.Size = new Size(22, 12);
+                this.groupBoxHistories.Controls.Add(label);
+
+                TextBox textDevices = textBoxHistoryDevices[i] = new TextBox();
+                textDevices.Location = new Point(32 + ((i % 2) * 270), 14 + ((i / 2) * 20));
+                textDevices.Size = new Size(200, 16);
+                //textDevices.Text = $"[{i}]";
+                textDevices.ForeColor = Color.Black;
+                textDevices.ReadOnly = true;
+                this.groupBoxHistories.Controls.Add(textDevices);
+
+                TextBox textStatus = textBoxHistoryStatus[i] = new TextBox();
+                textStatus.Location = new Point(236 + ((i % 2) * 270), 14 + ((i / 2) * 20));
+                textStatus.Size = new Size(40, 16);
+                //textStatus.Text = $"[{i}]";
+                textStatus.ForeColor = Color.Black;
+                textStatus.ReadOnly = true;
+                this.groupBoxHistories.Controls.Add(textStatus);
+            }
+
+            this.textBoxLog = new TextBox();
+            this.textBoxLog.Multiline = true;
+            this.textBoxLog.ReadOnly = true;
+            this.textBoxLog.ForeColor = Color.Black;
+            this.textBoxLog.ScrollBars = ScrollBars.Both;
+            this.textBoxLog.WordWrap = false;
+            this.textBoxLog.Dock = DockStyle.Fill;
+            this.groupBoxLogs.Controls.Add(this.textBoxLog);
+
             this.FormClosing += delegate(object sender, FormClosingEventArgs e) {
                 if (e.CloseReason == CloseReason.UserClosing) {
                     e.Cancel = true;
@@ -184,6 +262,7 @@ namespace numrnr {
 
             this.ResumeLayout(false);
         }
+
         public void AppendLog(string message) {
 #if DEBUG
             if (this.InvokeRequired) {
@@ -191,7 +270,7 @@ namespace numrnr {
             } else {
                 const int MAX_LINES = 500;
                 string logLine = $"[{DateTime.Now:yyyy/MM/dd HH:mm:ss.fff}] {message}";
-                this.textBox.Lines = this.textBox.Lines.Prepend(logLine).Take(MAX_LINES).ToArray();
+                this.textBoxLog.Lines = this.textBoxLog.Lines.Prepend(logLine).Take(MAX_LINES).ToArray();
             }
 #endif
         }
@@ -246,22 +325,17 @@ namespace numrnr {
                 this.notifyIcon.Visible = true;
                 this.notifyIcon.Text = Const.APP_NAME;
                 this.notifyIcon.Icon = SystemIcons.Application;
-                this.notifyIcon.DoubleClick += new EventHandler(delegate (object sender, EventArgs e) {
-                });
+#if DEBUG
+                this.notifyIcon.DoubleClick += new EventHandler(triggerLogForm);
+#endif
 
                 //toolStripMenuItemLog
                 this.toolStripMenuItemLog.Text = "Log (&L)";
                 //this.toolStripMenuItemLog.Font = new Font(this.toolStripMenuItemLog.Font, FontStyle.Bold);
-                this.toolStripMenuItemLog.Click += new EventHandler(delegate (object sender, EventArgs e) {
-                    if(this.logForm.Visible) {
-                        this.logForm.Hide();
-                    } else {
-                        this.logForm.Show();
-                        this.logForm.Activate();
-                    }
-                });
+                this.toolStripMenuItemLog.Click += new EventHandler(triggerLogForm);
 #if DEBUG
                 this.toolStripMenuItemLog.Enabled = true;
+                this.toolStripMenuItemLog.Font = new Font(this.toolStripMenuItemLog.Font, FontStyle.Bold);
 #else
                 this.toolStripMenuItemLog.Enabled = false;
 #endif
@@ -314,12 +388,12 @@ namespace numrnr {
                             this._lastDeviceHandle = hDevice;
                         }
                     } else {
-                        this.logForm.AppendLog($"[WM_INPUT] Dev: 0x{hDevice.ToInt64():X8}, numLock: {curIsNumLockOn}");
- 
+                        this.logForm.AppendLog($"[WM_INPUT] Dev: 0x{hDevice.ToInt64():X8}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._deviceNumlockMap.ContainsKey(hDevice)}");
+
                         if(isChagedDevice && this._deviceNumlockMap.ContainsKey(hDevice)) {
                             bool expectedIsNumLockOn = this._deviceNumlockMap[hDevice];
                             if(curIsNumLockOn != expectedIsNumLockOn) {
-                                ToggleNumLock();
+                                toggleNumLock();
                                 curIsNumLockOn = expectedIsNumLockOn;
                             }
                         }
@@ -327,16 +401,42 @@ namespace numrnr {
                         this._lastDeviceHandle = hDevice;
                     }
                 }
+                // update
+                {
+                    int i = 0;
+                    foreach(KeyValuePair<IntPtr, bool> item in _deviceNumlockMap) {
+                        if(i <= LogForm.MAX_HISTORIES) {
+                            IntPtr deviceId = item.Key;
+                            bool isNumlockOn = item.Value;
+                            this.logForm.Histories[i] = ($"0x{deviceId.ToInt64():X8}", $"{isNumlockOn}");
+                            i++;
+                        } else {
+                            break;
+                        }
+                    }
+                }
             };
 
-            this._proc = HookCallback;
-            // SetHook();
+            this._proc = hookCallback;
+            // setHook();
         }
 
         /// <summary>
-        /// SetHook
+        /// triggerLogForm
         /// </summary>
-        private void SetHook() {
+        private void triggerLogForm(object sender, EventArgs e) {
+            if(this.logForm.Visible) {
+                this.logForm.Hide();
+            } else {
+                this.logForm.Show();
+                this.logForm.Activate();
+            }
+        }
+
+        /// <summary>
+        /// setHook
+        /// </summary>
+        private void setHook() {
             using(Process curProcess = Process.GetCurrentProcess())
             using(ProcessModule curModule = curProcess.MainModule) {
                 this._hookId = Win32Api.SetWindowsHookEx(
@@ -347,11 +447,11 @@ namespace numrnr {
                 );
             }
         }
-        
+
         /// <summary>
-        /// ToggleNumLock
+        /// toggleNumLock
         /// </summary>
-        private void ToggleNumLock() {
+        private void toggleNumLock() {
             Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
             // Key Down
             inputs[0].type = Win32Api.INPUT_KEYBOARD;
@@ -373,9 +473,9 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// HookCallback
+        /// hookCallback
         /// </summary>
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        private IntPtr hookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
             if (nCode >= 0) {
                 int wmMessage = wParam.ToInt32();
                 if (wmMessage == Win32Api.WM_KEYDOWN || wmMessage == Win32Api.WM_SYSKEYDOWN) {
@@ -392,7 +492,7 @@ namespace numrnr {
                                 bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
                                 bool expectedIsNumLockOn = this._deviceNumlockMap[_lastDeviceHandle];
                                 if(curIsNumLockOn != expectedIsNumLockOn) {
-                                    ToggleNumLock();
+                                    toggleNumLock();
                                 }
                             }
                         }
