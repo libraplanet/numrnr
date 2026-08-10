@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Linq;
 using System.Drawing;
 using System.Windows.Forms;
@@ -25,6 +26,7 @@ namespace numrnr {
         public const int WM_INPUT = 0x00FF;
         public const int RIDEV_INPUTSINK = 0x00000100;
         public const uint RID_INPUT = 0x10000003;
+        public const uint RIDI_DEVICENAME = 0x20000007;
 
         // SendInput 用定義
         public const uint INPUT_KEYBOARD = 1;
@@ -107,6 +109,9 @@ namespace numrnr {
         [DllImport("user32.dll", SetLastError = true)]
         public static extern uint GetRawInputData(IntPtr hRawInput, uint uiCommand, IntPtr pData, ref uint pcbSize, uint cbSizeHeader);
 
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern uint GetRawInputDeviceInfo(IntPtr hDevice, uint uiCommand, IntPtr pData, ref uint pcbSize);
+
         [DllImport("user32.dll", SetLastError = true)]
         public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
     }
@@ -116,6 +121,63 @@ namespace numrnr {
     /// </summary>
     static class Const {
         public const string APP_NAME = "Num R'n'R";
+    }
+
+    /// <summary>
+    /// Common.
+    /// </summary>
+    static class Common {
+        /// <summary>
+        /// toggleNumLock
+        /// </summary>
+        public static void toggleNumLock() {
+            Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
+            // Key Down
+            inputs[0].type = Win32Api.INPUT_KEYBOARD;
+            inputs[0].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
+            inputs[0].ki.wScan = 0;
+            inputs[0].ki.dwFlags = 0;
+            inputs[0].ki.time = 0;
+            inputs[0].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
+
+            // Key Up
+            inputs[1].type = Win32Api.INPUT_KEYBOARD;
+            inputs[1].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
+            inputs[1].ki.wScan = 0;
+            inputs[1].ki.dwFlags = Win32Api.KEYEVENTF_KEYUP;
+            inputs[1].ki.time = 0;
+            inputs[1].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
+
+            Win32Api.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Win32Api.INPUT)));
+        }
+
+        /// <summary>
+        /// getHardwareId
+        /// </summary>
+        public static string? getHardwareId(IntPtr hDevice) {
+            uint pcbSize = 0;
+            Win32Api.GetRawInputDeviceInfo(hDevice, Win32Api.RIDI_DEVICENAME, IntPtr.Zero, ref pcbSize);
+            if(pcbSize  > 0) {
+                IntPtr pData = Marshal.AllocHGlobal((int)pcbSize);
+                try {
+                    if (Win32Api.GetRawInputDeviceInfo(hDevice, Win32Api.RIDI_DEVICENAME, pData, ref pcbSize) != uint.MaxValue) {
+                        string devicePath = Marshal.PtrToStringAuto(pData) ?? "";
+                        Match match = Regex.Match(devicePath, @"VID_[0-9A-Fa-f]{4}&PID_[0-9A-Fa-f]{4}", RegexOptions.IgnoreCase);
+                        if (match.Success) {
+                            return match.Value.ToUpper();
+                        } else {
+                            return devicePath;
+                        }
+                    } else {
+                        return null;
+                    }
+                } finally {
+                    Marshal.FreeHGlobal(pData);
+                }
+            } else {
+                return null;
+            }
+        }
     }
 
     /// <summary>
@@ -166,9 +228,11 @@ namespace numrnr {
 
     class LogForm : Form {
         public static readonly int MAX_HISTORIES = 8;
+        private Button buttonToggle;
         private TextBox[] textBoxHistoryDevices = new TextBox[MAX_HISTORIES];
         private TextBox[] textBoxHistoryStatus = new TextBox[MAX_HISTORIES];
         private TextBox textBoxLog;
+        private GroupBox groupDebug;
         private GroupBox groupBoxHistories;
         private GroupBox groupBoxLogs;
 
@@ -203,20 +267,36 @@ namespace numrnr {
 
             this.Histories = new HistoriesIndexer(this);
 
-            this.Size = new Size(600, 480);
+            this.Size = new Size(800, 600);
             this.Text = $"{Const.APP_NAME} - Log";
 
+            this.groupDebug = new GroupBox();
+            this.groupDebug.Text = "debug";
+            this.groupDebug.Location = new Point(10, 10);
+            this.groupDebug.Size = new Size(760, 50);
+            this.groupDebug.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            this.Controls.Add(this.groupDebug);
+
+            this.buttonToggle = new Button();
+            this.buttonToggle.Text = "toggle num lock.";
+            this.groupDebug.Location = new Point(10, 10);
+            this.buttonToggle.Click += delegate(object sender, EventArgs e){
+                this.AppendLog("toggle num lock!");
+                Common.toggleNumLock();
+            };
+            this.groupDebug.Controls.Add(this.buttonToggle);
+
             this.groupBoxHistories = new GroupBox();
-            this.groupBoxHistories.Text = "histories";
-            this.groupBoxHistories.Location = new Point(10, 10);
-            this.groupBoxHistories.Size = new Size(560, 100);
+            this.groupBoxHistories.Text = "hardware histories";
+            this.groupBoxHistories.Location = new Point(10, 70);
+            this.groupBoxHistories.Size = new Size(760, 100);
             this.groupBoxHistories.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             this.Controls.Add(this.groupBoxHistories);
 
             this.groupBoxLogs = new GroupBox();
             this.groupBoxLogs.Text = "logs";
-            this.groupBoxLogs.Location = new Point(10, 110);
-            this.groupBoxLogs.Size = new Size(560, 320);
+            this.groupBoxLogs.Location = new Point(10, 180);
+            this.groupBoxLogs.Size = new Size(760, 370);
             this.groupBoxLogs.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             this.Controls.Add(this.groupBoxLogs);
 
@@ -291,9 +371,10 @@ namespace numrnr {
         private Win32Api.LowLevelKeyboardProc _proc;
         private IntPtr _hookId = IntPtr.Zero;
         private RawInputReceiver? _rawInputReceiver = null;
-        private IntPtr _lastDeviceHandle = IntPtr.Zero;
+        private string? _lastDeviceHardwareId = null;
         private bool _isChagedDevice = false;
-        private Dictionary<IntPtr, bool> _deviceNumlockMap = new Dictionary<IntPtr, bool>();
+        private Dictionary<string, bool> _deviceNumlockMap = new Dictionary<string, bool>();
+        private Dictionary<IntPtr, string> _deviceHardwareMap = new Dictionary<IntPtr, string>();
 
         /// <summary>
         ///  The main entry point for the application.
@@ -379,36 +460,54 @@ namespace numrnr {
             this._rawInputReceiver = new RawInputReceiver();
             this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice, ushort vkey, uint message, IntPtr extraInfo) {
                 if (extraInfo != Win32Api.INSIGNIA_REINJECT) {
-                    bool isChagedDevice = this._isChagedDevice = (_lastDeviceHandle != IntPtr.Zero) && (_lastDeviceHandle != hDevice);
+                    Func<string> getHardwareIdFix = delegate() {
+                        if(this._deviceHardwareMap.ContainsKey(hDevice)) {
+                            return this._deviceHardwareMap[hDevice];
+                        } else {
+                            return Common.getHardwareId(hDevice) ?? $"0x{hDevice.ToInt64():X8}";
+                        }
+                    };
+                    string hardwareId = getHardwareIdFix();
+                    _deviceHardwareMap[hDevice] = hardwareId;
+                    bool isChagedDevice = this._isChagedDevice = (_lastDeviceHardwareId != null) && (_lastDeviceHardwareId != hardwareId);
                     bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
                     if(vkey == Win32Api.VK_NUMLOCK) {
                         if (message == Win32Api.WM_KEYDOWN) {
                             // NUM LOCKが押下されたので、先読み
-                            this._deviceNumlockMap[hDevice] = !curIsNumLockOn;
-                            this._lastDeviceHandle = hDevice;
+                            this._deviceNumlockMap[hardwareId] = !curIsNumLockOn;
+                            this._lastDeviceHardwareId = hardwareId;
+                            this.logForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {!curIsNumLockOn}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
                         }
                     } else {
-                        this.logForm.AppendLog($"[WM_INPUT] Dev: 0x{hDevice.ToInt64():X8}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._deviceNumlockMap.ContainsKey(hDevice)}");
-
-                        if(isChagedDevice && this._deviceNumlockMap.ContainsKey(hDevice)) {
-                            bool expectedIsNumLockOn = this._deviceNumlockMap[hDevice];
-                            if(curIsNumLockOn != expectedIsNumLockOn) {
-                                toggleNumLock();
-                                curIsNumLockOn = expectedIsNumLockOn;
+                        this.logForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
+                        if(isChagedDevice) {
+                            this.logForm.AppendLog($"change keyboard!");
+                            if(this._deviceNumlockMap.ContainsKey(hardwareId)) {
+                                bool expectedIsNumLockOn = this._deviceNumlockMap[hardwareId];
+                                this.logForm.AppendLog($"containd map => check! (curIsNumLockOn: {curIsNumLockOn}, expectedIsNumLockOn: {expectedIsNumLockOn})");
+                                if(curIsNumLockOn != expectedIsNumLockOn) {
+                                    this.logForm.AppendLog($"restore!");
+                                    Common.toggleNumLock();
+                                    curIsNumLockOn = expectedIsNumLockOn;
+                                } else {
+                                    this.logForm.AppendLog($"nop (samed)");
+                                }
+                            } else {
+                                this.logForm.AppendLog($"nop (no contained...)");
                             }
                         }
-                        this._deviceNumlockMap[hDevice] = curIsNumLockOn;
-                        this._lastDeviceHandle = hDevice;
+                        this._deviceNumlockMap[hardwareId] = curIsNumLockOn;
+                        this._lastDeviceHardwareId = hardwareId;
                     }
                 }
                 // update
                 {
                     int i = 0;
-                    foreach(KeyValuePair<IntPtr, bool> item in _deviceNumlockMap) {
+                    foreach(KeyValuePair<string, bool> item in _deviceNumlockMap) {
                         if(i <= LogForm.MAX_HISTORIES) {
-                            IntPtr deviceId = item.Key;
+                            string hardwareId = item.Key;
                             bool isNumlockOn = item.Value;
-                            this.logForm.Histories[i] = ($"0x{deviceId.ToInt64():X8}", $"{isNumlockOn}");
+                            this.logForm.Histories[i] = ($"{hardwareId}", $"{isNumlockOn}");
                             i++;
                         } else {
                             break;
@@ -449,30 +548,6 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// toggleNumLock
-        /// </summary>
-        private void toggleNumLock() {
-            Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
-            // Key Down
-            inputs[0].type = Win32Api.INPUT_KEYBOARD;
-            inputs[0].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
-            inputs[0].ki.wScan = 0;
-            inputs[0].ki.dwFlags = 0;
-            inputs[0].ki.time = 0;
-            inputs[0].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
-
-            // Key Up
-            inputs[1].type = Win32Api.INPUT_KEYBOARD;
-            inputs[1].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
-            inputs[1].ki.wScan = 0;
-            inputs[1].ki.dwFlags = Win32Api.KEYEVENTF_KEYUP;
-            inputs[1].ki.time = 0;
-            inputs[1].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
-
-            Win32Api.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Win32Api.INPUT)));
-        }
-
-        /// <summary>
         /// hookCallback
         /// </summary>
         private IntPtr hookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
@@ -485,14 +560,14 @@ namespace numrnr {
                         Keys key = (Keys)hookStruct.vkCode;
                         if (key == Keys.NumLock) {
                             // 何もしない
-                            this.logForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: 0x{_lastDeviceHandle.ToInt64():X8}");
+                            this.logForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: {_lastDeviceHardwareId}");
                         } else {
-                            this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: 0x{_lastDeviceHandle.ToInt64():X8} isChagedDevice: {_isChagedDevice}");
-                            if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(_lastDeviceHandle)) {
+                            this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: {_lastDeviceHardwareId} isChagedDevice: {_isChagedDevice}");
+                            if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(_lastDeviceHardwareId ?? null)) {
                                 bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
-                                bool expectedIsNumLockOn = this._deviceNumlockMap[_lastDeviceHandle];
+                                bool expectedIsNumLockOn = this._deviceNumlockMap[_lastDeviceHardwareId];
                                 if(curIsNumLockOn != expectedIsNumLockOn) {
-                                    toggleNumLock();
+                                    Common.toggleNumLock();
                                 }
                             }
                         }
@@ -501,6 +576,7 @@ namespace numrnr {
             }
             return Win32Api.CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
+
 
         /// <summary>
         /// Dispose
