@@ -30,6 +30,7 @@ namespace numrnr {
 
         // SendInput 用定義
         public const uint INPUT_KEYBOARD = 1;
+        public const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         public const uint KEYEVENTF_KEYUP = 0x0002;
         public static readonly IntPtr INSIGNIA_REINJECT = new IntPtr(0x4E554D52); // "NUMR" マーク
 
@@ -67,7 +68,7 @@ namespace numrnr {
             public IntPtr dwExtraInfo;
         }
 
-        [StructLayout(LayoutKind.Explicit)]
+        [StructLayout(LayoutKind.Explicit, Size = 28)]
         public struct INPUT {
             [FieldOffset(0)]
             public uint type;
@@ -114,6 +115,9 @@ namespace numrnr {
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        [DllImport("user32.dll")]
+        public static extern uint MapVirtualKey(uint uCode, uint uMapType);
     }
 
     /// <summary>
@@ -130,31 +134,69 @@ namespace numrnr {
         /// <summary>
         /// toggleNumLock
         /// </summary>
-        public static void toggleNumLock() {
+        public static uint toggleNumLock() {
             Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
+
+            // VK_NUMLOCK から Hardware ScanCode を取得 (通常は 0x45)
+            ushort scanCode = (ushort)Win32Api.MapVirtualKey((uint)Win32Api.VK_NUMLOCK, 0);
+
             // Key Down
             inputs[0].type = Win32Api.INPUT_KEYBOARD;
             inputs[0].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
-            inputs[0].ki.wScan = 0;
-            inputs[0].ki.dwFlags = 0;
+            inputs[0].ki.wScan = scanCode;
+            inputs[0].ki.dwFlags = Win32Api.KEYEVENTF_EXTENDEDKEY;
             inputs[0].ki.time = 0;
             inputs[0].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
 
             // Key Up
             inputs[1].type = Win32Api.INPUT_KEYBOARD;
             inputs[1].ki.wVk = (ushort)Win32Api.VK_NUMLOCK;
-            inputs[1].ki.wScan = 0;
-            inputs[1].ki.dwFlags = Win32Api.KEYEVENTF_KEYUP;
+            inputs[1].ki.wScan = scanCode;
+            inputs[1].ki.dwFlags = Win32Api.KEYEVENTF_KEYUP | Win32Api.KEYEVENTF_EXTENDEDKEY;
             inputs[1].ki.time = 0;
             inputs[1].ki.dwExtraInfo = Win32Api.INSIGNIA_REINJECT;
 
-            Win32Api.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Win32Api.INPUT)));
+            return Win32Api.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Win32Api.INPUT)));
         }
 
         /// <summary>
-        /// getHardwareId
+        /// safeToggleNumLock
         /// </summary>
-        public static string? getHardwareId(IntPtr hDevice) {
+        public static int safeToggleNumLock() {
+            try {
+                uint result = toggleNumLock();
+                if(result == 0) {
+                    int errorCode = Marshal.GetLastWin32Error();
+                    if(errorCode == 0) {
+                        return 1;
+                    } else {
+                        return errorCode;
+                    }
+                } else {
+                    return 0;
+                }
+            } catch(Exception ex) {
+                int hr = Marshal.GetHRForException(ex);
+                if(hr < 0) {
+                    return hr;
+                } else {
+                    return -1;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// DeviceManager.
+    /// </summary>
+    static class DeviceManager {
+        private static readonly Dictionary<IntPtr, string> _deviceHardwareMap = new Dictionary<IntPtr, string>();
+        private static readonly Regex _regexVidPid = new Regex(@"VID_[0-9A-Fa-f]{4}&PID_[0-9A-Fa-f]{4}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// getHardwareId (private module).
+        /// </summary>
+        private static string? _getHardwareId(IntPtr hDevice) {
             uint pcbSize = 0;
             Win32Api.GetRawInputDeviceInfo(hDevice, Win32Api.RIDI_DEVICENAME, IntPtr.Zero, ref pcbSize);
             if(pcbSize  > 0) {
@@ -162,7 +204,7 @@ namespace numrnr {
                 try {
                     if (Win32Api.GetRawInputDeviceInfo(hDevice, Win32Api.RIDI_DEVICENAME, pData, ref pcbSize) != uint.MaxValue) {
                         string devicePath = Marshal.PtrToStringAuto(pData) ?? "";
-                        Match match = Regex.Match(devicePath, @"VID_[0-9A-Fa-f]{4}&PID_[0-9A-Fa-f]{4}", RegexOptions.IgnoreCase);
+                        Match match = _regexVidPid.Match(devicePath);
                         if (match.Success) {
                             return match.Value.ToUpper();
                         } else {
@@ -176,6 +218,24 @@ namespace numrnr {
                 }
             } else {
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// getHardwareIdFix.
+        /// </summary>
+        public static string getHardwareIdFix(IntPtr hDevice) {
+            if(_deviceHardwareMap.ContainsKey(hDevice)) {
+                return _deviceHardwareMap[hDevice];
+            } else {
+                string hexHandleInstance = $"0x{hDevice.ToInt64():X8}";
+                try {
+                    string hardwareId = _getHardwareId(hDevice) ?? hexHandleInstance;
+                    _deviceHardwareMap[hDevice] = hardwareId;
+                    return hardwareId;
+                } catch {
+                    return hexHandleInstance;
+                }
             }
         }
     }
@@ -232,7 +292,7 @@ namespace numrnr {
         private TextBox[] textBoxHistoryDevices = new TextBox[MAX_HISTORIES];
         private TextBox[] textBoxHistoryStatus = new TextBox[MAX_HISTORIES];
         private TextBox textBoxLog;
-        private GroupBox groupDebug;
+        private GroupBox groupBoxDebug;
         private GroupBox groupBoxHistories;
         private GroupBox groupBoxLogs;
 
@@ -270,21 +330,21 @@ namespace numrnr {
             this.Size = new Size(800, 600);
             this.Text = $"{Const.APP_NAME} - Log";
 
-            this.groupDebug = new GroupBox();
-            this.groupDebug.Text = "debug";
-            this.groupDebug.Location = new Point(10, 10);
-            this.groupDebug.Size = new Size(760, 50);
-            this.groupDebug.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            this.Controls.Add(this.groupDebug);
+            this.groupBoxDebug = new GroupBox();
+            this.groupBoxDebug.Text = "debug";
+            this.groupBoxDebug.Location = new Point(10, 10);
+            this.groupBoxDebug.Size = new Size(760, 50);
+            this.groupBoxDebug.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            this.Controls.Add(this.groupBoxDebug);
 
             this.buttonToggle = new Button();
             this.buttonToggle.Text = "toggle num lock.";
-            this.groupDebug.Location = new Point(10, 10);
+            this.buttonToggle.Location = new Point(10, 10);
             this.buttonToggle.Click += delegate(object sender, EventArgs e){
-                this.AppendLog("toggle num lock!");
-                Common.toggleNumLock();
+                int errorCode = Common.safeToggleNumLock();
+                this.AppendLog($"toggle num lock! errorCode({errorCode})");
             };
-            this.groupDebug.Controls.Add(this.buttonToggle);
+            this.groupBoxDebug.Controls.Add(this.buttonToggle);
 
             this.groupBoxHistories = new GroupBox();
             this.groupBoxHistories.Text = "hardware histories";
@@ -374,7 +434,6 @@ namespace numrnr {
         private string? _lastDeviceHardwareId = null;
         private bool _isChagedDevice = false;
         private Dictionary<string, bool> _deviceNumlockMap = new Dictionary<string, bool>();
-        private Dictionary<IntPtr, string> _deviceHardwareMap = new Dictionary<IntPtr, string>();
 
         /// <summary>
         ///  The main entry point for the application.
@@ -407,13 +466,13 @@ namespace numrnr {
                 this.notifyIcon.Text = Const.APP_NAME;
                 this.notifyIcon.Icon = SystemIcons.Application;
 #if DEBUG
-                this.notifyIcon.DoubleClick += new EventHandler(triggerLogForm);
+                this.notifyIcon.DoubleClick += new EventHandler(toggleLogForm);
 #endif
 
                 //toolStripMenuItemLog
                 this.toolStripMenuItemLog.Text = "Log (&L)";
                 //this.toolStripMenuItemLog.Font = new Font(this.toolStripMenuItemLog.Font, FontStyle.Bold);
-                this.toolStripMenuItemLog.Click += new EventHandler(triggerLogForm);
+                this.toolStripMenuItemLog.Click += new EventHandler(toggleLogForm);
 #if DEBUG
                 this.toolStripMenuItemLog.Enabled = true;
                 this.toolStripMenuItemLog.Font = new Font(this.toolStripMenuItemLog.Font, FontStyle.Bold);
@@ -460,15 +519,7 @@ namespace numrnr {
             this._rawInputReceiver = new RawInputReceiver();
             this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice, ushort vkey, uint message, IntPtr extraInfo) {
                 if (extraInfo != Win32Api.INSIGNIA_REINJECT) {
-                    Func<string> getHardwareIdFix = delegate() {
-                        if(this._deviceHardwareMap.ContainsKey(hDevice)) {
-                            return this._deviceHardwareMap[hDevice];
-                        } else {
-                            return Common.getHardwareId(hDevice) ?? $"0x{hDevice.ToInt64():X8}";
-                        }
-                    };
-                    string hardwareId = getHardwareIdFix();
-                    _deviceHardwareMap[hDevice] = hardwareId;
+                    string hardwareId = DeviceManager.getHardwareIdFix(hDevice);
                     bool isChagedDevice = this._isChagedDevice = (_lastDeviceHardwareId != null) && (_lastDeviceHardwareId != hardwareId);
                     bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
                     if(vkey == Win32Api.VK_NUMLOCK) {
@@ -487,7 +538,10 @@ namespace numrnr {
                                 this.logForm.AppendLog($"containd map => check! (curIsNumLockOn: {curIsNumLockOn}, expectedIsNumLockOn: {expectedIsNumLockOn})");
                                 if(curIsNumLockOn != expectedIsNumLockOn) {
                                     this.logForm.AppendLog($"restore!");
-                                    Common.toggleNumLock();
+
+                                    int errorCode = Common.safeToggleNumLock();
+                                    this.logForm.AppendLog($"toggle num lock! errorCode({errorCode})");
+
                                     curIsNumLockOn = expectedIsNumLockOn;
                                 } else {
                                     this.logForm.AppendLog($"nop (samed)");
@@ -521,9 +575,9 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// triggerLogForm
+        /// toggleLogForm
         /// </summary>
-        private void triggerLogForm(object sender, EventArgs e) {
+        private void toggleLogForm(object sender, EventArgs e) {
             if(this.logForm.Visible) {
                 this.logForm.Hide();
             } else {
@@ -563,11 +617,14 @@ namespace numrnr {
                             this.logForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: {_lastDeviceHardwareId}");
                         } else {
                             this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: {_lastDeviceHardwareId} isChagedDevice: {_isChagedDevice}");
-                            if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(_lastDeviceHardwareId ?? null)) {
-                                bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
-                                bool expectedIsNumLockOn = this._deviceNumlockMap[_lastDeviceHardwareId];
-                                if(curIsNumLockOn != expectedIsNumLockOn) {
-                                    Common.toggleNumLock();
+                            if(this._lastDeviceHardwareId != null) {
+                                if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(this._lastDeviceHardwareId)) {
+                                    bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+                                    bool expectedIsNumLockOn = this._deviceNumlockMap[this._lastDeviceHardwareId];
+                                    if(curIsNumLockOn != expectedIsNumLockOn) {
+                                        int errorCode = Common.safeToggleNumLock();
+                                        this.logForm.AppendLog($"toggle num lock! errorCode({errorCode})");
+                                    }
                                 }
                             }
                         }
