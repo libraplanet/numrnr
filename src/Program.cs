@@ -1,13 +1,14 @@
 using System;
+using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Linq;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
-using System.Diagnostics;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Diagnostics;
 
 namespace numrnr {
     /// <summary>
@@ -86,7 +87,15 @@ namespace numrnr {
             public IntPtr ExtraInformation;
         }
 
+        public const int ATTACH_PARENT_PROCESS = -1;
+
         public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll")]
+        public static extern bool AttachConsole(int dwProcessId);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        public static extern IntPtr GetModuleHandle(string lpModuleName);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
@@ -97,9 +106,6 @@ namespace numrnr {
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern IntPtr GetModuleHandle(string lpModuleName);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, ExactSpelling = true)]
         public static extern short GetKeyState(int keyCode);
@@ -118,6 +124,7 @@ namespace numrnr {
 
         [DllImport("user32.dll")]
         public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
     }
 
     /// <summary>
@@ -176,6 +183,7 @@ namespace numrnr {
                     return 0;
                 }
             } catch(Exception ex) {
+                Console.WriteLine($"[EX] safeToggleNumLock: {ex}");
                 int hr = Marshal.GetHRForException(ex);
                 if(hr < 0) {
                     return hr;
@@ -233,7 +241,8 @@ namespace numrnr {
                     string hardwareId = _getHardwareId(hDevice) ?? hexHandleInstance;
                     _deviceHardwareMap[hDevice] = hardwareId;
                     return hardwareId;
-                } catch {
+                } catch(Exception ex) {
+                    Console.WriteLine($"[EX] getHardwareIdFix: {ex}");
                     return hexHandleInstance;
                 }
             }
@@ -269,9 +278,13 @@ namespace numrnr {
                             Win32Api.RAWINPUTHEADER header = (Win32Api.RAWINPUTHEADER)Marshal.PtrToStructure(buffer, typeof(Win32Api.RAWINPUTHEADER));
                             // keyboard (1)
                             if (header.dwType == 1) {
-                                IntPtr keyboardPtr = buffer + Marshal.SizeOf(typeof(Win32Api.RAWINPUTHEADER));
-                                Win32Api.RAWKEYBOARD rawKeyboard = (Win32Api.RAWKEYBOARD)Marshal.PtrToStructure(keyboardPtr, typeof(Win32Api.RAWKEYBOARD));
-                                OnDeviceInput?.Invoke(header.hDevice, rawKeyboard.VKey, rawKeyboard.Message, rawKeyboard.ExtraInformation);
+                                try {
+                                    IntPtr keyboardPtr = buffer + Marshal.SizeOf(typeof(Win32Api.RAWINPUTHEADER));
+                                    Win32Api.RAWKEYBOARD rawKeyboard = (Win32Api.RAWKEYBOARD)Marshal.PtrToStructure(keyboardPtr, typeof(Win32Api.RAWKEYBOARD));
+                                    OnDeviceInput?.Invoke(header.hDevice, rawKeyboard.VKey, rawKeyboard.Message, rawKeyboard.ExtraInformation);
+                                } catch(Exception ex) {
+                                    Console.WriteLine($"[EX] RawInput OnDeviceInput: {ex}");
+                                }
                             }
                         }
                     } finally {
@@ -296,36 +309,15 @@ namespace numrnr {
         private GroupBox groupBoxHistories;
         private GroupBox groupBoxLogs;
 
-        public HistoriesIndexer Histories {get;}
 
-        public class HistoriesIndexer {
-            private readonly LogForm _logForm;
-            public HistoriesIndexer(LogForm logForm) {
-                this._logForm = logForm;
-            }
-            public (string device, string status) this[int index] {
-                get {
-                    if((index >= 0) && (index < MAX_HISTORIES)) {
-                        return (this._logForm.textBoxHistoryDevices[index].Text, this._logForm.textBoxHistoryStatus[index].Text);
-                    } else {
-                        throw new ArgumentOutOfRangeException(nameof(index));
-                    }
-                }
-                set {
-                    if((index >= 0) && (index < MAX_HISTORIES)) {
-                        this._logForm.textBoxHistoryDevices[index].Text = value.device;
-                        this._logForm.textBoxHistoryStatus[index].Text = value.status;
-                    } else {
-                        throw new ArgumentOutOfRangeException(nameof(index));
-                    }
-                }
-            }
-        }
+        private System.Windows.Forms.Timer _uiUpdateTimer;
+
+        private readonly object _lockObj = new object();
+        private readonly Dictionary<string, bool> _cacheDeviceMap = new Dictionary<string, bool>();
+        private readonly List<string> _cacheLogLineList = new List<string>();
 
         public LogForm() {
             this.SuspendLayout();
-
-            this.Histories = new HistoriesIndexer(this);
 
             this.Size = new Size(800, 600);
             this.Text = $"{Const.APP_NAME} - Log";
@@ -339,10 +331,14 @@ namespace numrnr {
 
             this.buttonToggle = new Button();
             this.buttonToggle.Text = "toggle num lock.";
-            this.buttonToggle.Location = new Point(10, 10);
+            this.buttonToggle.Location = new Point(10, 15);
             this.buttonToggle.Click += delegate(object sender, EventArgs e){
-                int errorCode = Common.safeToggleNumLock();
-                this.AppendLog($"toggle num lock! errorCode({errorCode})");
+                try {
+                    int errorCode = Common.safeToggleNumLock();
+                    this.AppendLog($"toggle num lock! errorCode({errorCode})");
+                } catch(Exception ex) {
+                    Console.WriteLine($"[EX] buttonToggle Click: {ex}");
+                }
             };
             this.groupBoxDebug.Controls.Add(this.buttonToggle);
 
@@ -393,6 +389,26 @@ namespace numrnr {
             this.textBoxLog.Dock = DockStyle.Fill;
             this.groupBoxLogs.Controls.Add(this.textBoxLog);
 
+            this._uiUpdateTimer = new System.Windows.Forms.Timer();
+            this._uiUpdateTimer.Interval = 100;
+            this._uiUpdateTimer.Tick += delegate(object sender, EventArgs e) {
+                flushUi();
+            };
+
+            this.Shown += delegate(object sender, EventArgs e) {
+                flushUi();
+                this._uiUpdateTimer.Start();
+            };
+
+            this.VisibleChanged += delegate(object sender, EventArgs e) {
+                if(this.Visible) {
+                    flushUi();
+                    this._uiUpdateTimer.Start();
+                } else {
+                    this._uiUpdateTimer.Stop();
+                }
+            };
+
             this.FormClosing += delegate(object sender, FormClosingEventArgs e) {
                 if (e.CloseReason == CloseReason.UserClosing) {
                     e.Cancel = true;
@@ -403,16 +419,56 @@ namespace numrnr {
             this.ResumeLayout(false);
         }
 
+        /// <summary>
+        /// スレッド セーフな履歴表示更新
+        /// </summary>
+        public void UpdateHistories(Dictionary<string, bool> deviceMap) {
+            lock(this._lockObj) {
+                this._cacheDeviceMap.Clear();
+                foreach (KeyValuePair<string, bool> item in deviceMap) {
+                    this._cacheDeviceMap[item.Key] = item.Value;
+                }
+            }
+        }
+
         public void AppendLog(string message) {
-#if DEBUG
-            if (this.InvokeRequired) {
-                this.Invoke(new Action<string>(AppendLog), message);
-            } else {
+            lock(this._lockObj) {
                 const int MAX_LINES = 500;
                 string logLine = $"[{DateTime.Now:yyyy/MM/dd HH:mm:ss.fff}] {message}";
-                this.textBoxLog.Lines = this.textBoxLog.Lines.Prepend(logLine).Take(MAX_LINES).ToArray();
+                this._cacheLogLineList.Insert(0, logLine);
+                if (this._cacheLogLineList.Count > MAX_LINES) {
+                    int removeCount = this._cacheLogLineList.Count - MAX_LINES;
+                    this._cacheLogLineList.RemoveRange(MAX_LINES, removeCount);
+                }
             }
-#endif
+        }
+        private void flushUi() {
+            try {
+                lock(this._lockObj) {
+                    {
+                        int i = 0;
+                        foreach(KeyValuePair<string, bool> item in _cacheDeviceMap) {
+                            if(i < MAX_HISTORIES) {
+                                string hardwareId = item.Key;
+                                bool isNumlockOn = item.Value;
+                                this.textBoxHistoryDevices[i].Text = $"{hardwareId}";
+                                this.textBoxHistoryStatus[i].Text = $"{isNumlockOn}";
+                                i++;
+                            } else {
+                                break;
+                            }
+                        }
+                        for(; i < MAX_HISTORIES; i++) {
+                            this.textBoxHistoryDevices[i].Text = "";
+                            this.textBoxHistoryStatus[i].Text = "";
+                        }
+                    }
+                    //
+                    this.textBoxLog.Lines = this._cacheLogLineList.ToArray();
+                }
+            } catch(Exception ex) {
+                Console.WriteLine($"[EX] flushUi: {ex}");
+            }
         }
     }
 
@@ -436,16 +492,36 @@ namespace numrnr {
         private Dictionary<string, bool> _deviceNumlockMap = new Dictionary<string, bool>();
 
         /// <summary>
-        ///  The main entry point for the application.
+        /// The main entry point for the application.
         /// </summary>
         [STAThread]
         static void Main() {
-            // To customize application configuration such as set high DPI settings or default font,
-            // see https://aka.ms/applicationconfiguration.
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            using(new numrnr.Program()) {
-                System.Windows.Forms.Application.Run();
+            // UIスレッド上の未処理例外をキャッチ
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += delegate (object sender, System.Threading.ThreadExceptionEventArgs e) {
+                Console.WriteLine($"[EX] ThreadException: {e.Exception}");
+            };
+
+            // バックグラウンドスレッド等での未処理例外をキャッチ
+            AppDomain.CurrentDomain.UnhandledException += delegate (object sender, UnhandledExceptionEventArgs e) {
+                Console.WriteLine($"[EX] UnhandledException: {e.ExceptionObject}");
+            };
+
+            if(Win32Api.AttachConsole(Win32Api.ATTACH_PARENT_PROCESS)) {
+                StreamWriter writer = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+                writer.AutoFlush = true;
+                Console.SetOut(writer);
+                Console.WriteLine("start.");
+            }
+
+            try {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using(new numrnr.Program()) {
+                    System.Windows.Forms.Application.Run();
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"[EX] Fatal Main: {ex}");
             }
         }
 
@@ -465,48 +541,50 @@ namespace numrnr {
                 this.notifyIcon.Visible = true;
                 this.notifyIcon.Text = Const.APP_NAME;
                 this.notifyIcon.Icon = SystemIcons.Application;
-#if DEBUG
                 this.notifyIcon.DoubleClick += new EventHandler(toggleLogForm);
-#endif
 
                 //toolStripMenuItemLog
                 this.toolStripMenuItemLog.Text = "Log (&L)";
                 //this.toolStripMenuItemLog.Font = new Font(this.toolStripMenuItemLog.Font, FontStyle.Bold);
                 this.toolStripMenuItemLog.Click += new EventHandler(toggleLogForm);
-#if DEBUG
                 this.toolStripMenuItemLog.Enabled = true;
                 this.toolStripMenuItemLog.Font = new Font(this.toolStripMenuItemLog.Font, FontStyle.Bold);
-#else
-                this.toolStripMenuItemLog.Enabled = false;
-#endif
 
                 //toolStripMenuItemInfo
                 this.toolStripMenuItemInfo.Text = "Info (&I)";
                 this.toolStripMenuItemInfo.Click += new EventHandler(delegate (object sender, EventArgs e) {
-                    AssemblyConfigurationAttribute? configAttr = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyConfigurationAttribute>();
-                    string buildConfig = configAttr?.Configuration ?? "Unknown";
-                    string appName = "Num R'n'R";
-                    StringBuilder sb = new StringBuilder();
-                    sb.AppendLine($"-- {appName} --");
-                    sb.AppendLine("Independent NumLock state manager for multiple keyboards.");
-                    sb.AppendLine("");
-                    sb.AppendLine("version: v.0.0.0.0.0.0.0.0.0.1");
-                    sb.AppendLine("auther: libraplanet");
-                    sb.AppendLine("license: MIT License");
-                    sb.AppendLine($"build: {buildConfig}");
+                    try {
+                        AssemblyConfigurationAttribute? configAttr = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyConfigurationAttribute>();
+                        string buildConfig = configAttr?.Configuration ?? "Unknown";
+                        string appName = "Num R'n'R";
+                        StringBuilder sb = new StringBuilder();
+                        sb.AppendLine($"-- {appName} --");
+                        sb.AppendLine("Independent NumLock state manager for multiple keyboards.");
+                        sb.AppendLine("");
+                        sb.AppendLine("version: v.0.0.0.0.0.0.0.0.0.1");
+                        sb.AppendLine("auther: libraplanet");
+                        sb.AppendLine("license: MIT License");
+                        sb.AppendLine($"build: {buildConfig}");
 
-                    MessageBox.Show(
-                        sb.ToString(),
-                        appName,
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information
-                    );
+                        MessageBox.Show(
+                            sb.ToString(),
+                            appName,
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information
+                        );
+                    } catch (Exception ex) {
+                        Console.WriteLine($"[EX] Info Click: {ex}");
+                    }
                 });
 
                 //toolStripMenuItemExit
                 this.toolStripMenuItemExit.Text = "Exit (&E)";
                 this.toolStripMenuItemExit.Click += new EventHandler(delegate (object sender, EventArgs e) {
-                    System.Windows.Forms.Application.Exit();
+                    try {
+                        System.Windows.Forms.Application.Exit();
+                    } catch (Exception ex) {
+                        Console.WriteLine($"[EX] Exit Click: {ex}");
+                    }
                 });
 
                 //contextMenuStrip
@@ -518,60 +596,181 @@ namespace numrnr {
 
             this._rawInputReceiver = new RawInputReceiver();
             this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice, ushort vkey, uint message, IntPtr extraInfo) {
-                if (extraInfo != Win32Api.INSIGNIA_REINJECT) {
-                    string hardwareId = DeviceManager.getHardwareIdFix(hDevice);
-                    bool isChagedDevice = this._isChagedDevice = (_lastDeviceHardwareId != null) && (_lastDeviceHardwareId != hardwareId);
-                    bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
-                    if(vkey == Win32Api.VK_NUMLOCK) {
-                        if (message == Win32Api.WM_KEYDOWN) {
-                            // NUM LOCKが押下されたので、先読み
-                            this._deviceNumlockMap[hardwareId] = !curIsNumLockOn;
-                            this._lastDeviceHardwareId = hardwareId;
-                            this.logForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {!curIsNumLockOn}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
-                        }
-                    } else {
-                        this.logForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
-                        if(isChagedDevice) {
-                            this.logForm.AppendLog($"change keyboard!");
-                            if(this._deviceNumlockMap.ContainsKey(hardwareId)) {
-                                bool expectedIsNumLockOn = this._deviceNumlockMap[hardwareId];
-                                this.logForm.AppendLog($"containd map => check! (curIsNumLockOn: {curIsNumLockOn}, expectedIsNumLockOn: {expectedIsNumLockOn})");
-                                if(curIsNumLockOn != expectedIsNumLockOn) {
-                                    this.logForm.AppendLog($"restore!");
-
-                                    int errorCode = Common.safeToggleNumLock();
-                                    this.logForm.AppendLog($"toggle num lock! errorCode({errorCode})");
-
-                                    curIsNumLockOn = expectedIsNumLockOn;
-                                } else {
-                                    this.logForm.AppendLog($"nop (samed)");
-                                }
-                            } else {
-                                this.logForm.AppendLog($"nop (no contained...)");
+                try {
+                    if (extraInfo != Win32Api.INSIGNIA_REINJECT) {
+                        string hardwareId = DeviceManager.getHardwareIdFix(hDevice);
+                        bool isChagedDevice = this._isChagedDevice = (_lastDeviceHardwareId != null) && (_lastDeviceHardwareId != hardwareId);
+                        bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+                        if(vkey == Win32Api.VK_NUMLOCK) {
+                            if (message == Win32Api.WM_KEYDOWN) {
+                                // NUM LOCKが押下されたので、先読み
+                                this._deviceNumlockMap[hardwareId] = !curIsNumLockOn;
+                                this._lastDeviceHardwareId = hardwareId;
+                                this.logForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {!curIsNumLockOn}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
                             }
-                        }
-                        this._deviceNumlockMap[hardwareId] = curIsNumLockOn;
-                        this._lastDeviceHardwareId = hardwareId;
-                    }
-                }
-                // update
-                {
-                    int i = 0;
-                    foreach(KeyValuePair<string, bool> item in _deviceNumlockMap) {
-                        if(i <= LogForm.MAX_HISTORIES) {
-                            string hardwareId = item.Key;
-                            bool isNumlockOn = item.Value;
-                            this.logForm.Histories[i] = ($"{hardwareId}", $"{isNumlockOn}");
-                            i++;
                         } else {
-                            break;
+                            this.logForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
+                            if(isChagedDevice) {
+                                this.logForm.AppendLog($"change keyboard!");
+                                if(this._deviceNumlockMap.ContainsKey(hardwareId)) {
+                                    bool expectedIsNumLockOn = this._deviceNumlockMap[hardwareId];
+                                    this.logForm.AppendLog($"containd map => check! (curIsNumLockOn: {curIsNumLockOn}, expectedIsNumLockOn: {expectedIsNumLockOn})");
+                                    if(curIsNumLockOn != expectedIsNumLockOn) {
+                                        this.logForm.AppendLog($"restore!");
+
+                                        int errorCode = Common.safeToggleNumLock();
+                                        this.logForm.AppendLog($"toggle num lock! errorCode({errorCode})");
+
+                                        curIsNumLockOn = expectedIsNumLockOn;
+                                    } else {
+                                        this.logForm.AppendLog($"nop (samed)");
+                                    }
+                                } else {
+                                    this.logForm.AppendLog($"nop (no contained...)");
+                                }
+                            }
+                            this._deviceNumlockMap[hardwareId] = curIsNumLockOn;
+                            this._lastDeviceHardwareId = hardwareId;
                         }
                     }
+                    // update
+                    this.logForm.UpdateHistories(this._deviceNumlockMap);
+                } catch (Exception ex) {
+                    Console.WriteLine($"[EX] OnDeviceInput: {ex}");
                 }
             };
 
             this._proc = hookCallback;
             // setHook();
+
+            // 設定ファイルの読み込み
+            try {
+                loadToDictionary(getSettingFileFullpath(), this._deviceNumlockMap);
+            } catch (Exception ex) {
+                Console.WriteLine($"[EX] loadToDictionary: {ex}");
+            } finally {
+                this.logForm.UpdateHistories(this._deviceNumlockMap);
+            }
+        }
+
+        /// <summary>
+        /// 実行ファイルのフルパスの取得.
+        /// </summary>
+        static string getApplicationFullpath() {
+            return Application.ExecutablePath;
+        }
+
+        /// <summary>
+        /// 設定ファイルのフルパスの取得.
+        /// (実行ファイルから取得).
+        /// </summary>
+        static string getSettingFileFullpath() {
+            return Path.ChangeExtension(Application.ExecutablePath, ".properties");
+        }
+
+        /// <summary>
+        /// 設定ファイルからDictionaryへ読み込み.
+        /// </summary>
+        static void loadToDictionary(string path, Dictionary<string, bool> dict){
+            try {
+                using(FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using(StreamReader reader = new StreamReader(stream, Encoding.UTF8)) {
+                    string? line;
+                    while((line = reader.ReadLine()) != null) {
+                        string buf = line.Trim();
+                        if(string.IsNullOrEmpty(buf) || buf.StartsWith("#") || buf.StartsWith(";")) {
+                            continue;
+                        } else {
+                            try {
+                                string[] parts = buf.Split(new char[] { '=' }, 2);
+                                if (parts.Length == 2) {
+                                    string strKey = parts[0].Trim();
+                                    string strValue = parts[1].Trim();
+                                    if(!string.IsNullOrEmpty(strKey)) {
+                                        if(bool.TryParse(strValue, out bool isNumLockOn)) {
+                                            dict[strKey] = isNumLockOn;
+                                        }
+                                    }
+                                }
+                            } catch {
+                                continue;
+                            }
+                        }
+                    }
+                }
+            } catch {
+            }
+        }
+
+        /// <summary>
+        /// Dictionaryの内容を設定ファイルに書き出し.
+        /// </summary>
+        static void saveDictionary(string path, Dictionary<string, bool> dict){
+            List<string> lines = new List<string>();
+
+            // (1) 現在の全行を読み込み
+            if(File.Exists(path)) {
+                // 既存
+                using(FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using(StreamReader reader = new StreamReader(stream, Encoding.UTF8)) {
+                    string? line;
+                    while((line = reader.ReadLine()) != null) {
+                        lines.Add(line);
+                    }
+                }
+            } else {
+                // 新規
+                lines.Add("# Num R'n'R Device Settings");
+                lines.Add($"# Created: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            }
+
+            // (2) Dictionaryを元に修正
+            {
+                // $1: インデント
+                // $2: 既存の Key
+                // $3: '=' とその前後の空白
+                // $4: 既存の Value
+                // $5: 行末のコメントや空白
+                Regex parserRegex = new Regex(@"^(\s*)([^\s=#;]+)(\s*=\s*)([^\s#;]+)(.*)$", RegexOptions.IgnoreCase);
+                foreach(KeyValuePair<string, bool> item in dict) {
+                    string key = item.Key;
+                    bool val = item.Value;
+                    bool isMatched = false;
+                    string strValue;
+                    if(val) {
+                        strValue = "true";
+                    } else {
+                        strValue = "false";
+                    }
+                    for(int i = 0; i < lines.Count; i++) {
+                        string buf = lines[i].Trim();
+                        if(string.IsNullOrEmpty(buf) || buf.StartsWith("#") || buf.StartsWith(";")) {
+                            continue;
+                        } else {
+                            Match match = parserRegex.Match(lines[i]);
+                            if(match.Success) {
+                                string existingKey = match.Groups[2].Value;
+                                if(string.Equals(key, existingKey, StringComparison.OrdinalIgnoreCase)) {
+                                    lines[i] = match.Result($"$1$2$3{strValue}$5");
+                                    isMatched = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if(!isMatched) {
+                        lines.Add($"{key}={strValue}");
+                    }
+                }
+            }
+
+            // (3) 書き出し
+            using(FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+            using(StreamWriter writer = new StreamWriter (stream, new UTF8Encoding(false))) {
+                foreach(string line in lines) {
+                    writer.WriteLine(line);
+                }
+            }
         }
 
         /// <summary>
@@ -590,14 +789,18 @@ namespace numrnr {
         /// setHook
         /// </summary>
         private void setHook() {
-            using(Process curProcess = Process.GetCurrentProcess())
-            using(ProcessModule curModule = curProcess.MainModule) {
-                this._hookId = Win32Api.SetWindowsHookEx(
-                    Win32Api.WH_KEYBOARD_LL,
-                    this._proc,
-                    Win32Api.GetModuleHandle(curModule.ModuleName),
-                    0
-                );
+            try {
+                using(Process curProcess = Process.GetCurrentProcess())
+                using(ProcessModule curModule = curProcess.MainModule) {
+                    this._hookId = Win32Api.SetWindowsHookEx(
+                        Win32Api.WH_KEYBOARD_LL,
+                        this._proc,
+                        Win32Api.GetModuleHandle(curModule.ModuleName),
+                        0
+                    );
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"[EX] setHook: {ex}");
             }
         }
 
@@ -605,31 +808,35 @@ namespace numrnr {
         /// hookCallback
         /// </summary>
         private IntPtr hookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-            if (nCode >= 0) {
-                int wmMessage = wParam.ToInt32();
-                if (wmMessage == Win32Api.WM_KEYDOWN || wmMessage == Win32Api.WM_SYSKEYDOWN) {
-                    Win32Api.KBDLLHOOKSTRUCT hookStruct = (Win32Api.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Win32Api.KBDLLHOOKSTRUCT));
+            try {
+                if (nCode >= 0) {
+                    int wmMessage = wParam.ToInt32();
+                    if (wmMessage == Win32Api.WM_KEYDOWN || wmMessage == Win32Api.WM_SYSKEYDOWN) {
+                        Win32Api.KBDLLHOOKSTRUCT hookStruct = (Win32Api.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Win32Api.KBDLLHOOKSTRUCT));
 
-                    if (hookStruct.dwExtraInfo != Win32Api.INSIGNIA_REINJECT) {
-                        Keys key = (Keys)hookStruct.vkCode;
-                        if (key == Keys.NumLock) {
-                            // 何もしない
-                            this.logForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: {_lastDeviceHardwareId}");
-                        } else {
-                            this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: {_lastDeviceHardwareId} isChagedDevice: {_isChagedDevice}");
-                            if(this._lastDeviceHardwareId != null) {
-                                if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(this._lastDeviceHardwareId)) {
-                                    bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
-                                    bool expectedIsNumLockOn = this._deviceNumlockMap[this._lastDeviceHardwareId];
-                                    if(curIsNumLockOn != expectedIsNumLockOn) {
-                                        int errorCode = Common.safeToggleNumLock();
-                                        this.logForm.AppendLog($"toggle num lock! errorCode({errorCode})");
+                        if (hookStruct.dwExtraInfo != Win32Api.INSIGNIA_REINJECT) {
+                            Keys key = (Keys)hookStruct.vkCode;
+                            if (key == Keys.NumLock) {
+                                // 何もしない
+                                this.logForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: {_lastDeviceHardwareId}");
+                            } else {
+                                this.logForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: {_lastDeviceHardwareId} isChagedDevice: {_isChagedDevice}");
+                                if(this._lastDeviceHardwareId != null) {
+                                    if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(this._lastDeviceHardwareId)) {
+                                        bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+                                        bool expectedIsNumLockOn = this._deviceNumlockMap[this._lastDeviceHardwareId];
+                                        if(curIsNumLockOn != expectedIsNumLockOn) {
+                                            int errorCode = Common.safeToggleNumLock();
+                                            this.logForm.AppendLog($"toggle num lock! errorCode({errorCode})");
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+            } catch (Exception ex) {
+                Console.WriteLine($"[EX] hookCallback: {ex}");
             }
             return Win32Api.CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
@@ -639,16 +846,28 @@ namespace numrnr {
         /// Dispose
         /// </summary>
         public void Dispose() {
-            if (this._hookId != IntPtr.Zero) {
-                Win32Api.UnhookWindowsHookEx(this._hookId);
-                this._hookId = IntPtr.Zero;
+            // 設定ファイルの書き出し
+            try {
+                saveDictionary(getSettingFileFullpath(), this._deviceNumlockMap);
+            } catch (Exception ex) {
+                Console.WriteLine($"[EX] Dispose saveDictionary: {ex}");
             }
 
-            _rawInputReceiver?.Dispose();
 
-            this.notifyIcon.Visible = false;
-            this.notifyIcon.Dispose();
-            this.contextMenuStrip.Dispose();
+            try {
+                if (this._hookId != IntPtr.Zero) {
+                    Win32Api.UnhookWindowsHookEx(this._hookId);
+                    this._hookId = IntPtr.Zero;
+                }
+
+                _rawInputReceiver?.Dispose();
+
+                this.notifyIcon.Visible = false;
+                this.notifyIcon.Dispose();
+                this.contextMenuStrip.Dispose();
+            } catch (Exception ex) {
+                Console.WriteLine($"[EX] Dispose CleanUp: {ex}");
+            }
         }
     }
 }
