@@ -243,7 +243,7 @@ namespace numrnr {
     /// </summary>
     static class DeviceManager {
         private static readonly ConsoleLogger Log = new ConsoleLogger(typeof(DeviceManager));
-        private static readonly Dictionary<IntPtr, string> _deviceHardwareMap = new Dictionary<IntPtr, string>();
+        private static readonly Dictionary<IntPtr, string> _deviceHardwareDict = new Dictionary<IntPtr, string>();
         private static readonly Regex _regexVidPid = new Regex(@"VID_[0-9A-Fa-f]{4}&PID_[0-9A-Fa-f]{4}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
@@ -279,13 +279,13 @@ namespace numrnr {
         /// GetHardwareIdFix.
         /// </summary>
         public static string GetHardwareIdFix(IntPtr hDevice) {
-            if(_deviceHardwareMap.ContainsKey(hDevice)) {
-                return _deviceHardwareMap[hDevice];
+            if(_deviceHardwareDict.ContainsKey(hDevice)) {
+                return _deviceHardwareDict[hDevice];
             } else {
                 string hexHandleInstance = $"0x{hDevice.ToInt64():X8}";
                 try {
                     string hardwareId = _GetHardwareId(hDevice) ?? hexHandleInstance;
-                    _deviceHardwareMap[hDevice] = hardwareId;
+                    _deviceHardwareDict[hDevice] = hardwareId;
                     return hardwareId;
                 } catch(Exception ex) {
                     Log.Info($"[EX] GetHardwareIdFix", ex);
@@ -348,34 +348,34 @@ namespace numrnr {
 
     class ControlPanelForm : Form {
         private static readonly ConsoleLogger Log = new ConsoleLogger(typeof(ControlPanelForm));
-        public static readonly int MAX_HISTORIES = 8;
+        public static readonly int MAX_MEMORIES = 8;
         private Button buttonToggle;
-        private TextBox[] textBoxHistoryDevices = new TextBox[MAX_HISTORIES];
-        private TextBox[] textBoxHistoryStatus = new TextBox[MAX_HISTORIES];
+        private TextBox[] textBoxMemoryDevices = new TextBox[MAX_MEMORIES];
+        private TextBox[] textBoxMemoryStatus = new TextBox[MAX_MEMORIES];
         private TextBox textBoxLog;
-        private GroupBox groupBoxDebug;
-        private GroupBox groupBoxHistories;
-        private GroupBox groupBoxLogs;
+        private GroupBox groupBoxQuickActions;
+        private GroupBox groupBoxDeviceStateMemory;
+        private GroupBox groupBoxActivityLogs;
 
 
         private System.Windows.Forms.Timer _uiUpdateTimer;
 
         private readonly object _lockObj = new object();
-        private readonly Dictionary<string, bool> _cacheDeviceMap = new Dictionary<string, bool>();
+        private readonly Dictionary<string, bool> _cacheNumlockStateDict = new Dictionary<string, bool>();
         private readonly List<string> _cacheLogLineList = new List<string>();
 
         public ControlPanelForm() {
             this.SuspendLayout();
 
             this.Size = new Size(800, 600);
-            this.Text = $"{Constants.APP_NAME} - Log";
+            this.Text = $"{Constants.APP_NAME} - Control Panel";
 
-            this.groupBoxDebug = new GroupBox();
-            this.groupBoxDebug.Text = "debug";
-            this.groupBoxDebug.Location = new Point(10, 10);
-            this.groupBoxDebug.Size = new Size(760, 50);
-            this.groupBoxDebug.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            this.Controls.Add(this.groupBoxDebug);
+            this.groupBoxQuickActions = new GroupBox();
+            this.groupBoxQuickActions.Text = "Quick Actions";
+            this.groupBoxQuickActions.Location = new Point(10, 10);
+            this.groupBoxQuickActions.Size = new Size(760, 50);
+            this.groupBoxQuickActions.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            this.Controls.Add(this.groupBoxQuickActions);
 
             this.buttonToggle = new Button();
             this.buttonToggle.Text = "toggle num lock.";
@@ -389,44 +389,44 @@ namespace numrnr {
                     Log.Info($"[EX] buttonToggle Click", ex);
                 }
             };
-            this.groupBoxDebug.Controls.Add(this.buttonToggle);
+            this.groupBoxQuickActions.Controls.Add(this.buttonToggle);
 
-            this.groupBoxHistories = new GroupBox();
-            this.groupBoxHistories.Text = "hardware histories";
-            this.groupBoxHistories.Location = new Point(10, 70);
-            this.groupBoxHistories.Size = new Size(760, 100);
-            this.groupBoxHistories.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            this.Controls.Add(this.groupBoxHistories);
+            this.groupBoxDeviceStateMemory = new GroupBox();
+            this.groupBoxDeviceStateMemory.Text = "Device State Memory";
+            this.groupBoxDeviceStateMemory.Location = new Point(10, 70);
+            this.groupBoxDeviceStateMemory.Size = new Size(760, 100);
+            this.groupBoxDeviceStateMemory.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            this.Controls.Add(this.groupBoxDeviceStateMemory);
 
-            this.groupBoxLogs = new GroupBox();
-            this.groupBoxLogs.Text = "logs";
-            this.groupBoxLogs.Location = new Point(10, 180);
-            this.groupBoxLogs.Size = new Size(760, 370);
-            this.groupBoxLogs.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
-            this.Controls.Add(this.groupBoxLogs);
+            this.groupBoxActivityLogs = new GroupBox();
+            this.groupBoxActivityLogs.Text = "Activity Logs";
+            this.groupBoxActivityLogs.Location = new Point(10, 180);
+            this.groupBoxActivityLogs.Size = new Size(760, 370);
+            this.groupBoxActivityLogs.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+            this.Controls.Add(this.groupBoxActivityLogs);
 
-            for(int i = 0; i < MAX_HISTORIES; i++) {
+            for(int i = 0; i < MAX_MEMORIES; i++) {
                 Label label = new Label();
                 label.Text = $"[{i}]:";
                 label.Location = new Point(10 + ((i % 2) * 270), 17 + ((i / 2) * 20));
                 label.Size = new Size(22, 12);
-                this.groupBoxHistories.Controls.Add(label);
+                this.groupBoxDeviceStateMemory.Controls.Add(label);
 
-                TextBox textDevices = textBoxHistoryDevices[i] = new TextBox();
+                TextBox textDevices = textBoxMemoryDevices[i] = new TextBox();
                 textDevices.Location = new Point(32 + ((i % 2) * 270), 14 + ((i / 2) * 20));
                 textDevices.Size = new Size(200, 16);
                 //textDevices.Text = $"[{i}]";
                 textDevices.ForeColor = Color.Black;
                 textDevices.ReadOnly = true;
-                this.groupBoxHistories.Controls.Add(textDevices);
+                this.groupBoxDeviceStateMemory.Controls.Add(textDevices);
 
-                TextBox textStatus = textBoxHistoryStatus[i] = new TextBox();
+                TextBox textStatus = textBoxMemoryStatus[i] = new TextBox();
                 textStatus.Location = new Point(236 + ((i % 2) * 270), 14 + ((i / 2) * 20));
                 textStatus.Size = new Size(40, 16);
                 //textStatus.Text = $"[{i}]";
                 textStatus.ForeColor = Color.Black;
                 textStatus.ReadOnly = true;
-                this.groupBoxHistories.Controls.Add(textStatus);
+                this.groupBoxDeviceStateMemory.Controls.Add(textStatus);
             }
 
             this.textBoxLog = new TextBox();
@@ -436,7 +436,7 @@ namespace numrnr {
             this.textBoxLog.ScrollBars = ScrollBars.Both;
             this.textBoxLog.WordWrap = false;
             this.textBoxLog.Dock = DockStyle.Fill;
-            this.groupBoxLogs.Controls.Add(this.textBoxLog);
+            this.groupBoxActivityLogs.Controls.Add(this.textBoxLog);
 
             this._uiUpdateTimer = new System.Windows.Forms.Timer();
             this._uiUpdateTimer.Interval = 100;
@@ -471,11 +471,11 @@ namespace numrnr {
         /// <summary>
         /// スレッド セーフな履歴表示更新
         /// </summary>
-        public void UpdateHistories(Dictionary<string, bool> deviceMap) {
+        public void UpdateHistories(Dictionary<string, bool> numlockStateDict) {
             lock(this._lockObj) {
-                this._cacheDeviceMap.Clear();
-                foreach (KeyValuePair<string, bool> item in deviceMap) {
-                    this._cacheDeviceMap[item.Key] = item.Value;
+                this._cacheNumlockStateDict.Clear();
+                foreach (KeyValuePair<string, bool> item in numlockStateDict) {
+                    this._cacheNumlockStateDict[item.Key] = item.Value;
                 }
             }
         }
@@ -497,20 +497,20 @@ namespace numrnr {
                 lock(this._lockObj) {
                     {
                         int i = 0;
-                        foreach(KeyValuePair<string, bool> item in _cacheDeviceMap) {
-                            if(i < MAX_HISTORIES) {
+                        foreach(KeyValuePair<string, bool> item in _cacheNumlockStateDict) {
+                            if(i < MAX_MEMORIES) {
                                 string hardwareId = item.Key;
                                 bool isNumlockOn = item.Value;
-                                this.textBoxHistoryDevices[i].Text = $"{hardwareId}";
-                                this.textBoxHistoryStatus[i].Text = $"{isNumlockOn}";
+                                this.textBoxMemoryDevices[i].Text = $"{hardwareId}";
+                                this.textBoxMemoryStatus[i].Text = $"{isNumlockOn}";
                                 i++;
                             } else {
                                 break;
                             }
                         }
-                        for(; i < MAX_HISTORIES; i++) {
-                            this.textBoxHistoryDevices[i].Text = "";
-                            this.textBoxHistoryStatus[i].Text = "";
+                        for(; i < MAX_MEMORIES; i++) {
+                            this.textBoxMemoryDevices[i].Text = "";
+                            this.textBoxMemoryStatus[i].Text = "";
                         }
                     }
                     //
@@ -603,7 +603,7 @@ namespace numrnr {
 
         // Process Member(2)
         private Config _config;
-        private Dictionary<string, bool> _deviceNumlockMap = new Dictionary<string, bool>();
+        private Dictionary<string, bool> _numlockStateDict = new Dictionary<string, bool>();
 
         /// <summary>
         /// The main entry point for the application.
@@ -725,17 +725,17 @@ namespace numrnr {
                         if(vkey == Win32Api.VK_NUMLOCK) {
                             if (message == Win32Api.WM_KEYDOWN) {
                                 // NUM LOCKが押下されたので、先読み
-                                this._deviceNumlockMap[hardwareId] = !curIsNumLockOn;
+                                this._numlockStateDict[hardwareId] = !curIsNumLockOn;
                                 this._lastDeviceHardwareId = hardwareId;
-                                this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {!curIsNumLockOn}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
+                                this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {!curIsNumLockOn}, hasContains:{this._numlockStateDict.ContainsKey(hardwareId)}");
                             }
                         } else {
-                            this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._deviceNumlockMap.ContainsKey(hardwareId)}");
+                            this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._numlockStateDict.ContainsKey(hardwareId)}");
                             if(isChagedDevice) {
                                 this.controlPanelForm.AppendLog($"change keyboard!");
-                                if(this._deviceNumlockMap.ContainsKey(hardwareId)) {
-                                    bool expectedIsNumLockOn = this._deviceNumlockMap[hardwareId];
-                                    this.controlPanelForm.AppendLog($"containd map => check! (curIsNumLockOn: {curIsNumLockOn}, expectedIsNumLockOn: {expectedIsNumLockOn})");
+                                if(this._numlockStateDict.ContainsKey(hardwareId)) {
+                                    bool expectedIsNumLockOn = this._numlockStateDict[hardwareId];
+                                    this.controlPanelForm.AppendLog($"contained in dict => check! (curIsNumLockOn: {curIsNumLockOn}, expectedIsNumLockOn: {expectedIsNumLockOn})");
                                     if(curIsNumLockOn != expectedIsNumLockOn) {
                                         this.controlPanelForm.AppendLog($"restore!");
 
@@ -750,12 +750,12 @@ namespace numrnr {
                                     this.controlPanelForm.AppendLog($"nop (no contained...)");
                                 }
                             }
-                            this._deviceNumlockMap[hardwareId] = curIsNumLockOn;
+                            this._numlockStateDict[hardwareId] = curIsNumLockOn;
                             this._lastDeviceHardwareId = hardwareId;
                         }
                     }
                     // update
-                    this.controlPanelForm.UpdateHistories(this._deviceNumlockMap);
+                    this.controlPanelForm.UpdateHistories(this._numlockStateDict);
                 } catch (Exception ex) {
                     Log.Info($"[EX] OnDeviceInput", ex);
                 }
@@ -765,11 +765,11 @@ namespace numrnr {
 
             // Propertyの読み込み
             try {
-                LoadToDictionary(GetSettingFileFullpath(), this._deviceNumlockMap);
+                LoadToDictionary(GetSettingFileFullpath(), this._numlockStateDict);
             } catch (Exception ex) {
                 Log.Info($"[EX] LoadToDictionary", ex);
             } finally {
-                this.controlPanelForm.UpdateHistories(this._deviceNumlockMap);
+                this.controlPanelForm.UpdateHistories(this._numlockStateDict);
             }
         }
 
@@ -923,7 +923,7 @@ namespace numrnr {
 
             // Propertyの書き出し
             try {
-                SaveDictionary(GetSettingFileFullpath(), this._deviceNumlockMap);
+                SaveDictionary(GetSettingFileFullpath(), this._numlockStateDict);
             } catch (Exception ex) {
                 Log.Info($"[EX] Dispose SaveDictionary", ex);
             }
