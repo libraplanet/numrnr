@@ -622,7 +622,7 @@ namespace numrnr {
             };
 
             if(Win32Api.AttachConsole(Win32Api.ATTACH_PARENT_PROCESS)) {
-                StreamWriter writer = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+                StreamWriter writer = new StreamWriter(Console.OpenStandardOutput(), Console.OutputEncoding);
                 writer.AutoFlush = true;
                 Console.SetOut(writer);
                 Log.Info("start.");
