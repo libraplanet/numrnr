@@ -206,9 +206,9 @@ namespace numrnr {
     static class Common {
         private static readonly ConsoleLogger Log = new ConsoleLogger(typeof(Common));
         /// <summary>
-        /// toggleNumLock
+        /// ToggleNumLock
         /// </summary>
-        public static uint toggleNumLock() {
+        public static uint ToggleNumLock() {
             Win32Api.INPUT[] inputs = new Win32Api.INPUT[2];
 
             // VK_NUMLOCK から Hardware ScanCode を取得 (通常は 0x45)
@@ -234,11 +234,11 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// safeToggleNumLock
+        /// SafeToggleNumLock
         /// </summary>
-        public static int safeToggleNumLock() {
+        public static int SafeToggleNumLock() {
             try {
-                uint result = toggleNumLock();
+                uint result = ToggleNumLock();
                 if(result == 0) {
                     int errorCode = Marshal.GetLastWin32Error();
                     if(errorCode == 0) {
@@ -250,7 +250,7 @@ namespace numrnr {
                     return 0;
                 }
             } catch(Exception ex) {
-                Log.Info($"[EX] safeToggleNumLock", ex);
+                Log.Info($"[EX] SafeToggleNumLock", ex);
                 int hr = Marshal.GetHRForException(ex);
                 if(hr < 0) {
                     return hr;
@@ -272,11 +272,12 @@ namespace numrnr {
         /// <summary>
         /// getHardwareId (private module).
         /// </summary>
-        private static string? _getHardwareId(IntPtr hDevice) {
+        private static string? _GetHardwareId(IntPtr hDevice) {
             uint pcbSize = 0;
             Win32Api.GetRawInputDeviceInfo(hDevice, Win32Api.RIDI_DEVICENAME, IntPtr.Zero, ref pcbSize);
             if(pcbSize  > 0) {
-                IntPtr pData = Marshal.AllocHGlobal((int)pcbSize);
+                int bytes = (int)pcbSize * Marshal.SystemDefaultCharSize;
+                IntPtr pData = Marshal.AllocHGlobal(bytes);
                 try {
                     if (Win32Api.GetRawInputDeviceInfo(hDevice, Win32Api.RIDI_DEVICENAME, pData, ref pcbSize) != uint.MaxValue) {
                         string devicePath = Marshal.PtrToStringAuto(pData) ?? "";
@@ -298,19 +299,19 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// getHardwareIdFix.
+        /// GetHardwareIdFix.
         /// </summary>
-        public static string getHardwareIdFix(IntPtr hDevice) {
+        public static string GetHardwareIdFix(IntPtr hDevice) {
             if(_deviceHardwareMap.ContainsKey(hDevice)) {
                 return _deviceHardwareMap[hDevice];
             } else {
                 string hexHandleInstance = $"0x{hDevice.ToInt64():X8}";
                 try {
-                    string hardwareId = _getHardwareId(hDevice) ?? hexHandleInstance;
+                    string hardwareId = _GetHardwareId(hDevice) ?? hexHandleInstance;
                     _deviceHardwareMap[hDevice] = hardwareId;
                     return hardwareId;
                 } catch(Exception ex) {
-                    Log.Info($"[EX] getHardwareIdFix", ex);
+                    Log.Info($"[EX] GetHardwareIdFix", ex);
                     return hexHandleInstance;
                 }
             }
@@ -405,7 +406,7 @@ namespace numrnr {
             this.buttonToggle.Click += delegate(object sender, EventArgs e){
                 Log.Info("buttonToggle.Click() => toggle numlock.");
                 try {
-                    int errorCode = Common.safeToggleNumLock();
+                    int errorCode = Common.SafeToggleNumLock();
                     this.AppendLog($"toggle num lock! errorCode({errorCode})");
                 } catch(Exception ex) {
                     Log.Info($"[EX] buttonToggle Click", ex);
@@ -463,17 +464,17 @@ namespace numrnr {
             this._uiUpdateTimer = new System.Windows.Forms.Timer();
             this._uiUpdateTimer.Interval = 100;
             this._uiUpdateTimer.Tick += delegate(object sender, EventArgs e) {
-                updateControls();
+                UpdateControls();
             };
 
             this.Shown += delegate(object sender, EventArgs e) {
-                updateControls();
+                UpdateControls();
                 this._uiUpdateTimer.Start();
             };
 
             this.VisibleChanged += delegate(object sender, EventArgs e) {
                 if(this.Visible) {
-                    updateControls();
+                    UpdateControls();
                     this._uiUpdateTimer.Start();
                 } else {
                     this._uiUpdateTimer.Stop();
@@ -514,7 +515,7 @@ namespace numrnr {
             }
         }
 
-        private void updateControls() {
+        private void UpdateControls() {
             try {
                 lock(this._lockObj) {
                     {
@@ -539,7 +540,7 @@ namespace numrnr {
                     this.textBoxLog.Lines = this._cacheLogLineList.ToArray();
                 }
             } catch(Exception ex) {
-                Log.Info($"[EX] updateControls", ex);
+                Log.Info($"[EX] UpdateControls", ex);
             }
         }
     }
@@ -681,7 +682,7 @@ namespace numrnr {
                 this.notifyIcon.Icon = SystemIcons.Application;
                 this.notifyIcon.DoubleClick += delegate(object sender, EventArgs e) {
                     Log.Info("notifyIcon.DoubleClick() => show/close control panel.");
-                    toggleControlPanelForm();
+                    ToggleControlPanelForm();
                 };
 
                 //toolStripMenuItemControlPanel
@@ -689,7 +690,7 @@ namespace numrnr {
                 //this.toolStripMenuItemControlPanel.Font = new Font(this.toolStripMenuItemControlPanel.Font, FontStyle.Bold);
                 this.toolStripMenuItemControlPanel.Click += delegate(object sender, EventArgs e) {
                     Log.Info("toolStripMenuItemControlPanel.Click() => show/close control panel.");
-                    toggleControlPanelForm();
+                    ToggleControlPanelForm();
                 };
                 this.toolStripMenuItemControlPanel.Enabled = true;
                 this.toolStripMenuItemControlPanel.Font = new Font(this.toolStripMenuItemControlPanel.Font, FontStyle.Bold);
@@ -743,7 +744,7 @@ namespace numrnr {
             this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice, ushort vkey, uint message, IntPtr extraInfo) {
                 try {
                     if (extraInfo != Win32Api.INSIGNIA_REINJECT) {
-                        string hardwareId = DeviceManager.getHardwareIdFix(hDevice);
+                        string hardwareId = DeviceManager.GetHardwareIdFix(hDevice);
                         bool isChagedDevice = this._isChagedDevice = (_lastDeviceHardwareId != null) && (_lastDeviceHardwareId != hardwareId);
                         bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
                         if(vkey == Win32Api.VK_NUMLOCK) {
@@ -763,7 +764,7 @@ namespace numrnr {
                                     if(curIsNumLockOn != expectedIsNumLockOn) {
                                         this.controlPanelForm.AppendLog($"restore!");
 
-                                        int errorCode = Common.safeToggleNumLock();
+                                        int errorCode = Common.SafeToggleNumLock();
                                         this.controlPanelForm.AppendLog($"toggle num lock! errorCode({errorCode})");
 
                                         curIsNumLockOn = expectedIsNumLockOn;
@@ -785,16 +786,16 @@ namespace numrnr {
                 }
             };
 
-            this._proc = hookCallback;
-            // setHook();
+            this._proc = HookCallback;
+            // SetHook();
 
-            this._config = Config.SafeLoad(getConfigFileFullpath());
+            this._config = Config.SafeLoad(GetConfigFileFullpath());
 
             // Propertyの読み込み
             try {
-                loadToDictionary(getSettingFileFullpath(), this._deviceNumlockMap);
+                LoadToDictionary(GetSettingFileFullpath(), this._deviceNumlockMap);
             } catch (Exception ex) {
-                Log.Info($"[EX] loadToDictionary", ex);
+                Log.Info($"[EX] LoadToDictionary", ex);
             } finally {
                 this.controlPanelForm.UpdateHistories(this._deviceNumlockMap);
             }
@@ -803,7 +804,7 @@ namespace numrnr {
         /// <summary>
         /// 実行ファイルのフルパスの取得.
         /// </summary>
-        static string getApplicationFullpath() {
+        static string GetApplicationFullpath() {
             return Application.ExecutablePath;
         }
 
@@ -811,7 +812,7 @@ namespace numrnr {
         /// Configのフルパスの取得.
         /// (実行ファイルから取得).
         /// </summary>
-        static string getConfigFileFullpath() {
+        static string GetConfigFileFullpath() {
             return Path.ChangeExtension(Application.ExecutablePath, ".config");
         }
 
@@ -819,14 +820,14 @@ namespace numrnr {
         /// Propertyのフルパスの取得.
         /// (実行ファイルから取得).
         /// </summary>
-        static string getSettingFileFullpath() {
+        static string GetSettingFileFullpath() {
             return Path.ChangeExtension(Application.ExecutablePath, ".properties");
         }
 
         /// <summary>
         /// PropertyからDictionaryへ読み込み.
         /// </summary>
-        static void loadToDictionary(string path, Dictionary<string, bool> dict){
+        static void LoadToDictionary(string path, Dictionary<string, bool> dict){
             try {
                 using(FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                 using(StreamReader reader = new StreamReader(stream, Encoding.UTF8)) {
@@ -860,7 +861,7 @@ namespace numrnr {
         /// <summary>
         /// Dictionaryの内容をPropertyに書き出し.
         /// </summary>
-        static void saveDictionary(string path, Dictionary<string, bool> dict){
+        static void SaveDictionary(string path, Dictionary<string, bool> dict){
             List<string> lines = new List<string>();
 
             // (1) 現在の全行を読み込み
@@ -929,9 +930,9 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// toggleControlPanelForm
+        /// ToggleControlPanelForm
         /// </summary>
-        private void toggleControlPanelForm() {
+        private void ToggleControlPanelForm() {
             if(this.controlPanelForm.Visible) {
                 this.controlPanelForm.Hide();
             } else {
@@ -941,9 +942,9 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// setHook
+        /// SetHook
         /// </summary>
-        private void setHook() {
+        private void SetHook() {
             try {
                 using(Process curProcess = Process.GetCurrentProcess())
                 using(ProcessModule curModule = curProcess.MainModule) {
@@ -955,14 +956,14 @@ namespace numrnr {
                     );
                 }
             } catch (Exception ex) {
-                Log.Info($"[EX] setHook", ex);
+                Log.Info($"[EX] SetHook", ex);
             }
         }
 
         /// <summary>
-        /// hookCallback
+        /// HookCallback
         /// </summary>
-        private IntPtr hookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
             try {
                 if (nCode >= 0) {
                     int wmMessage = wParam.ToInt32();
@@ -980,7 +981,7 @@ namespace numrnr {
                                         bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
                                         bool expectedIsNumLockOn = this._deviceNumlockMap[this._lastDeviceHardwareId];
                                         if(curIsNumLockOn != expectedIsNumLockOn) {
-                                            int errorCode = Common.safeToggleNumLock();
+                                            int errorCode = Common.SafeToggleNumLock();
                                             this.controlPanelForm.AppendLog($"toggle num lock! errorCode({errorCode})");
                                         }
                                     }
@@ -990,7 +991,7 @@ namespace numrnr {
                     }
                 }
             } catch (Exception ex) {
-                Log.Info($"[EX] hookCallback", ex);
+                Log.Info($"[EX] HookCallback", ex);
             }
             return Win32Api.CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
@@ -1002,13 +1003,13 @@ namespace numrnr {
         public void Dispose() {
 
             // Configの書き出し
-            Config.SafeSave(getConfigFileFullpath(), this._config);
+            Config.SafeSave(GetConfigFileFullpath(), this._config);
 
             // Propertyの書き出し
             try {
-                saveDictionary(getSettingFileFullpath(), this._deviceNumlockMap);
+                SaveDictionary(GetSettingFileFullpath(), this._deviceNumlockMap);
             } catch (Exception ex) {
-                Log.Info($"[EX] Dispose saveDictionary", ex);
+                Log.Info($"[EX] Dispose SaveDictionary", ex);
             }
 
             try {
