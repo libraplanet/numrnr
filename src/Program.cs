@@ -236,6 +236,30 @@ namespace numrnr {
                 }
             }
         }
+
+        public static void ShowAbout() {
+            try {
+                AssemblyConfigurationAttribute? configAttr = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyConfigurationAttribute>();
+                string buildConfig = configAttr?.Configuration ?? "Unknown";
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine($"-- {Constants.APP_NAME} --");
+                sb.AppendLine("Independent NumLock state manager for multiple keyboards.");
+                sb.AppendLine("");
+                sb.AppendLine("version: v.0.0.0.0.0.0.0.0.0.1");
+                sb.AppendLine("auther: libraplanet");
+                sb.AppendLine("license: MIT License");
+                sb.AppendLine($"build: {buildConfig}");
+
+                MessageBox.Show(
+                    sb.ToString(),
+                    $"{Constants.APP_NAME} - Version",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+            } catch (Exception ex) {
+                Log.Info($"[EX] Show About", ex);
+            }
+        }
     }
 
     /// <summary>
@@ -349,14 +373,25 @@ namespace numrnr {
     class ControlPanelForm : Form {
         private static readonly ConsoleLogger Log = new ConsoleLogger(typeof(ControlPanelForm));
         public static readonly int MAX_MEMORIES = 8;
-        private Button buttonToggle;
+
+        private MenuStrip menuStrip;
+        private ToolStripMenuItem toolStripMenuItemFile;
+        private ToolStripMenuItem toolStripMenuItemFileExit;
+        private ToolStripMenuItem toolStripMenuItemMode;
+        private ToolStripMenuItem toolStripMenuItemModeIsUpdateStateMemory;
+        private ToolStripMenuItem toolStripMenuItemModeIsSyncNumlockLastState;
+        private ToolStripMenuItem toolStripMenuItemView;
+        private ToolStripMenuItem toolStripMenuItemViewTopmost;
+        private ToolStripMenuItem toolStripMenuItemDebug;
+        private ToolStripMenuItem toolStripMenuItemDebugToggleNumlock;
+        private ToolStripMenuItem toolStripMenuItemHelp;
+        private ToolStripMenuItem toolStripMenuItemHelpAbout;
+
         private TextBox[] textBoxMemoryDevices = new TextBox[MAX_MEMORIES];
         private TextBox[] textBoxMemoryStatus = new TextBox[MAX_MEMORIES];
         private TextBox textBoxLog;
-        private GroupBox groupBoxQuickActions;
         private GroupBox groupBoxDeviceStateMemory;
         private GroupBox groupBoxActivityLogs;
-
 
         private System.Windows.Forms.Timer _uiUpdateTimer;
 
@@ -364,44 +399,104 @@ namespace numrnr {
         private readonly Dictionary<string, bool> _cacheNumlockStateDict = new Dictionary<string, bool>();
         private readonly List<string> _cacheLogLineList = new List<string>();
 
+        private Config? _config;
+
         public ControlPanelForm() {
             this.SuspendLayout();
 
             this.Size = new Size(800, 600);
             this.Text = $"{Constants.APP_NAME} - Control Panel";
 
-            this.groupBoxQuickActions = new GroupBox();
-            this.groupBoxQuickActions.Text = "Quick Actions";
-            this.groupBoxQuickActions.Location = new Point(10, 10);
-            this.groupBoxQuickActions.Size = new Size(760, 50);
-            this.groupBoxQuickActions.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            this.Controls.Add(this.groupBoxQuickActions);
+            this.menuStrip = new MenuStrip();
 
-            this.buttonToggle = new Button();
-            this.buttonToggle.Text = "toggle num lock.";
-            this.buttonToggle.Location = new Point(10, 15);
-            this.buttonToggle.Click += delegate(object sender, EventArgs e){
-                Log.Info("buttonToggle.Click() => toggle numlock.");
+            this.toolStripMenuItemFile = new ToolStripMenuItem("File (&F)");
+            this.toolStripMenuItemFileExit = new ToolStripMenuItem("Exit Application (&E)", null, delegate(object sender, EventArgs e) {
+                Log.Info("toolStripMenuItemFileExit => Exit Application.");
+                try {
+                    System.Windows.Forms.Application.Exit();
+                } catch (Exception ex) {
+                    Log.Info($"[EX] Exit Application from menu.", ex);
+                }
+            });
+            this.toolStripMenuItemFile.DropDownItems.Add(this.toolStripMenuItemFileExit);
+
+
+            this.toolStripMenuItemMode = new ToolStripMenuItem("Mode (&M)");
+            this.toolStripMenuItemModeIsUpdateStateMemory = new ToolStripMenuItem("Update State (&U)", null, delegate(object sender, EventArgs e) {
+                Log.Info("toolStripMenuItemModeIsUpdateStateMemory => Update State Mode Change.");
+                if((this._config != null) && (this.toolStripMenuItemModeIsUpdateStateMemory != null)) {
+                    this.toolStripMenuItemModeIsUpdateStateMemory.Checked = !this.toolStripMenuItemModeIsUpdateStateMemory.Checked;
+                }
+            });
+            this.toolStripMenuItemModeIsUpdateStateMemory.CheckedChanged += delegate(object sender, EventArgs e) {
+                bool flg = toolStripMenuItemModeIsUpdateStateMemory.Checked;
+                Log.Info($"toolStripMenuItemModeIsUpdateStateMemory.Checked ({flg})=> _config.IsUpdateStateMemory");
+                if(this._config != null) {
+                    this._config.IsUpdateStateMemory = flg;
+                }
+            };
+            this.toolStripMenuItemMode.DropDownItems.Add(this.toolStripMenuItemModeIsUpdateStateMemory);
+            this.toolStripMenuItemModeIsSyncNumlockLastState = new ToolStripMenuItem("Sync Numlock LastState (&S)", null, delegate(object sender, EventArgs e) {
+                Log.Info("toolStripMenuItemModeIsUpdateStateMemory => Sync Numlock Last State Mode Change.");
+                if((this._config != null) && (this.toolStripMenuItemModeIsSyncNumlockLastState != null)) {
+                    this.toolStripMenuItemModeIsSyncNumlockLastState.Checked = !this.toolStripMenuItemModeIsSyncNumlockLastState.Checked;
+                }
+            });
+            this.toolStripMenuItemModeIsSyncNumlockLastState.CheckedChanged += delegate(object sender, EventArgs e) {
+                bool flg = toolStripMenuItemModeIsSyncNumlockLastState.Checked;
+                Log.Info($"toolStripMenuItemModeIsSyncNumlockLastState.Checked ({flg})=> _config.IsSyncNumlockLastState");
+                if(this._config != null) {
+                    this._config.IsSyncNumlockLastState = flg;
+                }
+            };
+            this.toolStripMenuItemMode.DropDownItems.Add(this.toolStripMenuItemModeIsSyncNumlockLastState);
+
+            this.toolStripMenuItemView = new ToolStripMenuItem("View (&V)");
+            this.toolStripMenuItemViewTopmost = new ToolStripMenuItem("Top Most (&T)", null, delegate(object sender, EventArgs e) {
+                Log.Info("");
+                this.TopMost = !this.TopMost;
+            });
+            this.toolStripMenuItemView.DropDownItems.Add(this.toolStripMenuItemViewTopmost);
+
+            this.toolStripMenuItemDebug = new ToolStripMenuItem("Debug (&D)");
+            this.toolStripMenuItemDebugToggleNumlock = new ToolStripMenuItem("Toggle Numlock (&T)", null, delegate(object sender, EventArgs e) {
+                Log.Info("");
                 try {
                     int errorCode = Common.SafeToggleNumLock();
                     this.AppendLog($"toggle num lock! errorCode({errorCode})");
                 } catch(Exception ex) {
                     Log.Info($"[EX] buttonToggle Click", ex);
                 }
-            };
-            this.groupBoxQuickActions.Controls.Add(this.buttonToggle);
+            });
+            this.toolStripMenuItemDebug.DropDownItems.Add(this.toolStripMenuItemDebugToggleNumlock);
+
+            this.toolStripMenuItemHelp = new ToolStripMenuItem("Help (&D)");
+            this.toolStripMenuItemHelpAbout = new ToolStripMenuItem("About (&A)", null, delegate(object sender, EventArgs e) {
+                Log.Info("");
+                Common.ShowAbout();
+            });
+            this.toolStripMenuItemHelp.DropDownItems.Add(this.toolStripMenuItemHelpAbout);
+
+            this.menuStrip.Items.Add(this.toolStripMenuItemFile);
+            this.menuStrip.Items.Add(this.toolStripMenuItemMode);
+            this.menuStrip.Items.Add(this.toolStripMenuItemView);
+            this.menuStrip.Items.Add(this.toolStripMenuItemDebug);
+            this.menuStrip.Items.Add(this.toolStripMenuItemHelp);
+
+            this.MainMenuStrip = this.menuStrip;
+            this.Controls.Add(this.menuStrip);
 
             this.groupBoxDeviceStateMemory = new GroupBox();
             this.groupBoxDeviceStateMemory.Text = "Device State Memory";
-            this.groupBoxDeviceStateMemory.Location = new Point(10, 70);
+            this.groupBoxDeviceStateMemory.Location = new Point(10, 30);
             this.groupBoxDeviceStateMemory.Size = new Size(760, 100);
             this.groupBoxDeviceStateMemory.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             this.Controls.Add(this.groupBoxDeviceStateMemory);
 
             this.groupBoxActivityLogs = new GroupBox();
             this.groupBoxActivityLogs.Text = "Activity Logs";
-            this.groupBoxActivityLogs.Location = new Point(10, 180);
-            this.groupBoxActivityLogs.Size = new Size(760, 370);
+            this.groupBoxActivityLogs.Location = new Point(10, 140);
+            this.groupBoxActivityLogs.Size = new Size(760, 410);
             this.groupBoxActivityLogs.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             this.Controls.Add(this.groupBoxActivityLogs);
 
@@ -469,6 +564,20 @@ namespace numrnr {
         }
 
         /// <summary>
+        /// Configの設定
+        /// </summary>
+        public void SetConfig(Config? config) {
+            if(config == null) {
+                this.toolStripMenuItemModeIsUpdateStateMemory.Checked = false;
+                this.toolStripMenuItemModeIsSyncNumlockLastState.Checked = false;
+            } else {
+                this.toolStripMenuItemModeIsUpdateStateMemory.Checked = config.IsUpdateStateMemory;
+                this.toolStripMenuItemModeIsSyncNumlockLastState.Checked = config.IsSyncNumlockLastState;
+            }
+            this._config = config;
+         }
+
+        /// <summary>
         /// スレッド セーフな履歴表示更新
         /// </summary>
         public void UpdateHistories(Dictionary<string, bool> numlockStateDict) {
@@ -528,10 +637,12 @@ namespace numrnr {
     [XmlRoot("NumrnrConfig")]
     public class Config {
         private static readonly ConsoleLogger Log = new ConsoleLogger(typeof(Config));
-        public bool IsUpdate{get; set;}
+        public bool IsUpdateStateMemory{get; set;}
+        public bool IsSyncNumlockLastState{get; set;}
 
         public Config () {
-            this.IsUpdate = true;
+            this.IsUpdateStateMemory = true;
+            this.IsSyncNumlockLastState = true;
         }
 
         public static Config Load(string path) {
@@ -590,7 +701,7 @@ namespace numrnr {
         private NotifyIcon notifyIcon = new NotifyIcon();
         private ContextMenuStrip contextMenuStrip = new ContextMenuStrip();
         private ToolStripMenuItem toolStripMenuItemControlPanel = new ToolStripMenuItem();
-        private ToolStripMenuItem toolStripMenuItemVersion= new ToolStripMenuItem();
+        private ToolStripMenuItem toolStripMenuItemAbout= new ToolStripMenuItem();
         private ToolStripMenuItem toolStripMenuItemExit = new ToolStripMenuItem();
 
         // Forms
@@ -670,31 +781,11 @@ namespace numrnr {
                 this.toolStripMenuItemControlPanel.Enabled = true;
                 this.toolStripMenuItemControlPanel.Font = new Font(this.toolStripMenuItemControlPanel.Font, FontStyle.Bold);
 
-                //toolStripMenuItemVersion
-                this.toolStripMenuItemVersion.Text = "Version (&V)";
-                this.toolStripMenuItemVersion.Click += new EventHandler(delegate (object sender, EventArgs e) {
-                    Log.Info("toolStripMenuItemVersion.Click() => show version info.");
-                    try {
-                        AssemblyConfigurationAttribute? configAttr = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyConfigurationAttribute>();
-                        string buildConfig = configAttr?.Configuration ?? "Unknown";
-                        StringBuilder sb = new StringBuilder();
-                        sb.AppendLine($"-- {Constants.APP_NAME} --");
-                        sb.AppendLine("Independent NumLock state manager for multiple keyboards.");
-                        sb.AppendLine("");
-                        sb.AppendLine("version: v.0.0.0.0.0.0.0.0.0.1");
-                        sb.AppendLine("auther: libraplanet");
-                        sb.AppendLine("license: MIT License");
-                        sb.AppendLine($"build: {buildConfig}");
-
-                        MessageBox.Show(
-                            sb.ToString(),
-                            $"{Constants.APP_NAME} - Version",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information
-                        );
-                    } catch (Exception ex) {
-                        Log.Info($"[EX] Info Click", ex);
-                    }
+                //toolStripMenuItemAbout
+                this.toolStripMenuItemAbout.Text = "About (&A)";
+                this.toolStripMenuItemAbout.Click += new EventHandler(delegate (object sender, EventArgs e) {
+                    Log.Info("toolStripMenuItemAbout.Click() => show version info.");
+                    Common.ShowAbout();
                 });
 
                 //toolStripMenuItemExit
@@ -710,7 +801,7 @@ namespace numrnr {
 
                 //contextMenuStrip
                 this.contextMenuStrip.Items.Add(this.toolStripMenuItemControlPanel);
-                this.contextMenuStrip.Items.Add(this.toolStripMenuItemVersion);
+                this.contextMenuStrip.Items.Add(this.toolStripMenuItemAbout);
                 this.contextMenuStrip.Items.Add(this.toolStripMenuItemExit);
             }
             this.contextMenuStrip.ResumeLayout(false);
@@ -724,8 +815,10 @@ namespace numrnr {
                         bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
                         if(vkey == Win32Api.VK_NUMLOCK) {
                             if (message == Win32Api.WM_KEYDOWN) {
-                                // NUM LOCKが押下されたので、先読み
-                                this._numlockStateDict[hardwareId] = !curIsNumLockOn;
+                                if(this._config?.IsUpdateStateMemory ?? false) {
+                                    // NUM LOCKが押下されたので、先読み
+                                    this._numlockStateDict[hardwareId] = !curIsNumLockOn;
+                                }
                                 this._lastDeviceHardwareId = hardwareId;
                                 this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {!curIsNumLockOn}, hasContains:{this._numlockStateDict.ContainsKey(hardwareId)}");
                             }
@@ -737,12 +830,14 @@ namespace numrnr {
                                     bool expectedIsNumLockOn = this._numlockStateDict[hardwareId];
                                     this.controlPanelForm.AppendLog($"contained in dict => check! (curIsNumLockOn: {curIsNumLockOn}, expectedIsNumLockOn: {expectedIsNumLockOn})");
                                     if(curIsNumLockOn != expectedIsNumLockOn) {
-                                        this.controlPanelForm.AppendLog($"restore!");
+                                        if(this._config?.IsSyncNumlockLastState ?? false) {
+                                            this.controlPanelForm.AppendLog($"restore!");
 
-                                        int errorCode = Common.SafeToggleNumLock();
-                                        this.controlPanelForm.AppendLog($"toggle num lock! errorCode({errorCode})");
+                                            int errorCode = Common.SafeToggleNumLock();
+                                            this.controlPanelForm.AppendLog($"toggle num lock! errorCode({errorCode})");
 
-                                        curIsNumLockOn = expectedIsNumLockOn;
+                                            curIsNumLockOn = expectedIsNumLockOn;
+                                        }
                                     } else {
                                         this.controlPanelForm.AppendLog($"nop (samed)");
                                     }
@@ -750,7 +845,9 @@ namespace numrnr {
                                     this.controlPanelForm.AppendLog($"nop (no contained...)");
                                 }
                             }
-                            this._numlockStateDict[hardwareId] = curIsNumLockOn;
+                            if(this._config?.IsUpdateStateMemory ?? false) {
+                                this._numlockStateDict[hardwareId] = curIsNumLockOn;
+                            }
                             this._lastDeviceHardwareId = hardwareId;
                         }
                     }
@@ -762,6 +859,7 @@ namespace numrnr {
             };
 
             this._config = Config.SafeLoad(GetConfigFileFullpath());
+            this.controlPanelForm.SetConfig(this._config);
 
             // Propertyの読み込み
             try {
