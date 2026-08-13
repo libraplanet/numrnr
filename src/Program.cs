@@ -38,15 +38,6 @@ namespace numrnr {
         public static readonly IntPtr INSIGNIA_REINJECT = new IntPtr(0x4E554D52); // "NUMR" マーク
 
         [StructLayout(LayoutKind.Sequential)]
-        public struct KBDLLHOOKSTRUCT {
-            public uint vkCode;
-            public uint scanCode;
-            public uint flags;
-            public uint time;
-            public IntPtr dwExtraInfo;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
         public struct RAWINPUTDEVICE {
             public ushort usUsagePage;
             public ushort usUsage;
@@ -91,23 +82,9 @@ namespace numrnr {
 
         public const int ATTACH_PARENT_PROCESS = -1;
 
-        public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("kernel32.dll")]
         public static extern bool AttachConsole(int dwProcessId);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern IntPtr GetModuleHandle(string lpModuleName);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, ExactSpelling = true)]
         public static extern short GetKeyState(int keyCode);
@@ -620,8 +597,6 @@ namespace numrnr {
         private ControlPanelForm controlPanelForm;
 
         // Process Member(1)
-        private Win32Api.LowLevelKeyboardProc _proc;
-        private IntPtr _hookId = IntPtr.Zero;
         private RawInputReceiver? _rawInputReceiver = null;
         private string? _lastDeviceHardwareId = null;
         private bool _isChagedDevice = false;
@@ -786,9 +761,6 @@ namespace numrnr {
                 }
             };
 
-            this._proc = HookCallback;
-            // SetHook();
-
             this._config = Config.SafeLoad(GetConfigFileFullpath());
 
             // Propertyの読み込み
@@ -942,62 +914,6 @@ namespace numrnr {
         }
 
         /// <summary>
-        /// SetHook
-        /// </summary>
-        private void SetHook() {
-            try {
-                using(Process curProcess = Process.GetCurrentProcess())
-                using(ProcessModule curModule = curProcess.MainModule) {
-                    this._hookId = Win32Api.SetWindowsHookEx(
-                        Win32Api.WH_KEYBOARD_LL,
-                        this._proc,
-                        Win32Api.GetModuleHandle(curModule.ModuleName),
-                        0
-                    );
-                }
-            } catch (Exception ex) {
-                Log.Info($"[EX] SetHook", ex);
-            }
-        }
-
-        /// <summary>
-        /// HookCallback
-        /// </summary>
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-            try {
-                if (nCode >= 0) {
-                    int wmMessage = wParam.ToInt32();
-                    if (wmMessage == Win32Api.WM_KEYDOWN || wmMessage == Win32Api.WM_SYSKEYDOWN) {
-                        Win32Api.KBDLLHOOKSTRUCT hookStruct = (Win32Api.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Win32Api.KBDLLHOOKSTRUCT));
-
-                        if (hookStruct.dwExtraInfo != Win32Api.INSIGNIA_REINJECT) {
-                            Keys key = (Keys)hookStruct.vkCode;
-                            if (key == Keys.NumLock) {
-                                this.controlPanelForm.AppendLog($"[HOOK] NumLock Pressed | vkCode: 0x{hookStruct.vkCode:X2}, Device: {_lastDeviceHardwareId}");
-                            } else {
-                                this.controlPanelForm.AppendLog($"[HOOK] Key: {key} (0x{hookStruct.vkCode:X2}), Device: {_lastDeviceHardwareId} isChagedDevice: {_isChagedDevice}");
-                                if(this._lastDeviceHardwareId != null) {
-                                    if(this._isChagedDevice && this._deviceNumlockMap.ContainsKey(this._lastDeviceHardwareId)) {
-                                        bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
-                                        bool expectedIsNumLockOn = this._deviceNumlockMap[this._lastDeviceHardwareId];
-                                        if(curIsNumLockOn != expectedIsNumLockOn) {
-                                            int errorCode = Common.SafeToggleNumLock();
-                                            this.controlPanelForm.AppendLog($"toggle num lock! errorCode({errorCode})");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } catch (Exception ex) {
-                Log.Info($"[EX] HookCallback", ex);
-            }
-            return Win32Api.CallNextHookEx(_hookId, nCode, wParam, lParam);
-        }
-
-
-        /// <summary>
         /// Dispose
         /// </summary>
         public void Dispose() {
@@ -1013,12 +929,7 @@ namespace numrnr {
             }
 
             try {
-                if (this._hookId != IntPtr.Zero) {
-                    Win32Api.UnhookWindowsHookEx(this._hookId);
-                    this._hookId = IntPtr.Zero;
-                }
-
-                _rawInputReceiver?.Dispose();
+                this._rawInputReceiver?.Dispose();
 
                 this.notifyIcon.Visible = false;
                 this.notifyIcon.Dispose();
