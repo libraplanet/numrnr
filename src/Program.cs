@@ -376,7 +376,7 @@ namespace numrnr {
 
         private MenuStrip menuStrip;
         private ToolStripMenuItem toolStripMenuItemFile;
-        private ToolStripMenuItem toolStripMenuItemFileExit;
+        private ToolStripMenuItem toolStripMenuItemFileMnimize;
         private ToolStripMenuItem toolStripMenuItemMode;
         private ToolStripMenuItem toolStripMenuItemModeIsUpdateStateMemory;
         private ToolStripMenuItem toolStripMenuItemModeIsSyncNumlockLastState;
@@ -387,22 +387,34 @@ namespace numrnr {
         private ToolStripMenuItem toolStripMenuItemHelp;
         private ToolStripMenuItem toolStripMenuItemHelpAbout;
 
-        private TextBox[] textBoxMemoryDevices = new TextBox[MAX_MEMORIES];
-        private TextBox[] textBoxMemoryStatus = new TextBox[MAX_MEMORIES];
+        private Label[] labelNumlockMemoryCurs = new Label[MAX_MEMORIES];
+        private TextBox[] textBoxNumlockMemoryDevices = new TextBox[MAX_MEMORIES];
+        private TextBox[] textBoxNumlockMemoryStatus = new TextBox[MAX_MEMORIES];
+        private Label[] labelNumlockMemoryLock = new Label[MAX_MEMORIES];
         private TextBox textBoxLog;
-        private GroupBox groupBoxDeviceStateMemory;
+        private GroupBox groupBoxNumlockStateMemories;
         private GroupBox groupBoxActivityLogs;
 
         private System.Windows.Forms.Timer _uiUpdateTimer;
+        private FormWindowState _lastWindowState;
 
         private readonly object _lockObj = new object();
         private readonly Dictionary<string, bool> _cacheNumlockStateDict = new Dictionary<string, bool>();
         private readonly List<string> _cacheLogLineList = new List<string>();
+        private string? _cacheLastDeviceHardwareId;
 
         private Config? _config;
 
         public ControlPanelForm() {
             this.SuspendLayout();
+
+            this.SetStyle(
+                ControlStyles.DoubleBuffer |
+                ControlStyles.UserPaint |
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer,
+                true
+            );
 
             this.Size = new Size(800, 600);
             this.Text = $"{Constants.APP_NAME} - Control Panel";
@@ -410,15 +422,15 @@ namespace numrnr {
             this.menuStrip = new MenuStrip();
 
             this.toolStripMenuItemFile = new ToolStripMenuItem("File (&F)");
-            this.toolStripMenuItemFileExit = new ToolStripMenuItem("Exit Application (&E)", null, delegate(object sender, EventArgs e) {
-                Log.Info("toolStripMenuItemFileExit => Exit Application.");
+            this.toolStripMenuItemFileMnimize = new ToolStripMenuItem("Minimize (&M)", null, delegate(object sender, EventArgs e) {
+                Log.Info("toolStripMenuItemFileMnimize => Minimize Window.");
                 try {
-                    System.Windows.Forms.Application.Exit();
+                    this.WindowState = FormWindowState.Minimized;
                 } catch (Exception ex) {
-                    Log.Info($"[EX] Exit Application from menu.", ex);
+                    Log.Info($"[EX] Minimize Window.", ex);
                 }
             });
-            this.toolStripMenuItemFile.DropDownItems.Add(this.toolStripMenuItemFileExit);
+            this.toolStripMenuItemFile.DropDownItems.Add(this.toolStripMenuItemFileMnimize);
 
 
             this.toolStripMenuItemMode = new ToolStripMenuItem("Mode (&M)");
@@ -433,6 +445,9 @@ namespace numrnr {
                 Log.Info($"toolStripMenuItemModeIsUpdateStateMemory.Checked ({flg})=> _config.IsUpdateStateMemory");
                 if(this._config != null) {
                     this._config.IsUpdateStateMemory = flg;
+                    foreach(Label label in this.labelNumlockMemoryLock) {
+                        label.Visible = !flg;
+                    }
                 }
             };
             this.toolStripMenuItemMode.DropDownItems.Add(this.toolStripMenuItemModeIsUpdateStateMemory);
@@ -486,12 +501,12 @@ namespace numrnr {
             this.MainMenuStrip = this.menuStrip;
             this.Controls.Add(this.menuStrip);
 
-            this.groupBoxDeviceStateMemory = new GroupBox();
-            this.groupBoxDeviceStateMemory.Text = "Device State Memory";
-            this.groupBoxDeviceStateMemory.Location = new Point(10, 30);
-            this.groupBoxDeviceStateMemory.Size = new Size(760, 100);
-            this.groupBoxDeviceStateMemory.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            this.Controls.Add(this.groupBoxDeviceStateMemory);
+            this.groupBoxNumlockStateMemories = new GroupBox();
+            this.groupBoxNumlockStateMemories.Text = "Numlock State Memories";
+            this.groupBoxNumlockStateMemories.Location = new Point(10, 30);
+            this.groupBoxNumlockStateMemories.Size = new Size(760, 100);
+            this.groupBoxNumlockStateMemories.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            this.Controls.Add(this.groupBoxNumlockStateMemories);
 
             this.groupBoxActivityLogs = new GroupBox();
             this.groupBoxActivityLogs.Text = "Activity Logs";
@@ -501,27 +516,44 @@ namespace numrnr {
             this.Controls.Add(this.groupBoxActivityLogs);
 
             for(int i = 0; i < MAX_MEMORIES; i++) {
-                Label label = new Label();
-                label.Text = $"[{i}]:";
-                label.Location = new Point(10 + ((i % 2) * 270), 17 + ((i / 2) * 20));
-                label.Size = new Size(22, 12);
-                this.groupBoxDeviceStateMemory.Controls.Add(label);
+                Label labelCur = this.labelNumlockMemoryCurs[i] = new Label();
+                labelCur.Text = $"=>";
+                labelCur.Location = new Point(5 + ((i % 2) * 370), 17 + ((i / 2) * 20));
+                labelCur.Size = new Size(20, 12);
+                labelCur.TextAlign = ContentAlignment.TopRight;
+                labelCur.Visible = false;
+                this.groupBoxNumlockStateMemories.Controls.Add(labelCur);
 
-                TextBox textDevices = textBoxMemoryDevices[i] = new TextBox();
-                textDevices.Location = new Point(32 + ((i % 2) * 270), 14 + ((i / 2) * 20));
-                textDevices.Size = new Size(200, 16);
+                Label labelNo = new Label();
+                labelNo.Text = $"[{i}]:";
+                labelNo.Location = new Point(25 + ((i % 2) * 370), 17 + ((i / 2) * 20));
+                labelNo.Size = new Size(22, 12);
+                labelNo.TextAlign = ContentAlignment.TopRight;
+                this.groupBoxNumlockStateMemories.Controls.Add(labelNo);
+
+                TextBox textDevices = textBoxNumlockMemoryDevices[i] = new TextBox();
+                textDevices.Location = new Point(47 + ((i % 2) * 370), 14 + ((i / 2) * 20));
+                textDevices.Size = new Size(260, 16);
                 //textDevices.Text = $"[{i}]";
                 textDevices.ForeColor = Color.Black;
                 textDevices.ReadOnly = true;
-                this.groupBoxDeviceStateMemory.Controls.Add(textDevices);
+                this.groupBoxNumlockStateMemories.Controls.Add(textDevices);
 
-                TextBox textStatus = textBoxMemoryStatus[i] = new TextBox();
-                textStatus.Location = new Point(236 + ((i % 2) * 270), 14 + ((i / 2) * 20));
+                TextBox textStatus = textBoxNumlockMemoryStatus[i] = new TextBox();
+                textStatus.Location = new Point(310 + ((i % 2) * 370), 14 + ((i / 2) * 20));
                 textStatus.Size = new Size(40, 16);
                 //textStatus.Text = $"[{i}]";
                 textStatus.ForeColor = Color.Black;
                 textStatus.ReadOnly = true;
-                this.groupBoxDeviceStateMemory.Controls.Add(textStatus);
+                this.groupBoxNumlockStateMemories.Controls.Add(textStatus);
+
+                Label labelLock = this.labelNumlockMemoryLock[i] = new Label();
+                labelLock.Text = $"🔏";
+                labelLock.Location = new Point(355 + ((i % 2) * 370), 17 + ((i / 2) * 20));
+                labelLock.Size = new Size(12, 12);
+                //labelLock.TextAlign = ContentAlignment.TopRight;
+                //labelLock.Visible = false;
+                this.groupBoxNumlockStateMemories.Controls.Add(labelLock);
             }
 
             this.textBoxLog = new TextBox();
@@ -553,13 +585,35 @@ namespace numrnr {
                 }
             };
 
-            this.FormClosing += delegate(object sender, FormClosingEventArgs e) {
-                if (e.CloseReason == CloseReason.UserClosing) {
-                    e.Cancel = true;
+            // state change
+            this.Resize += delegate(object sender, EventArgs e) {
+                FormWindowState state = this.WindowState;
+                if(this.WindowState == FormWindowState.Minimized) {
                     this.Hide();
+                    Log.Info($"this.Resize() {state} this.WindowState({this.WindowState}) this._lastWindowState({this._lastWindowState})");
+                } else {
+                    this._lastWindowState = this.WindowState;
+                    Log.Info($"this.Resize() {state} this.WindowState({this.WindowState}) this._lastWindowState({this._lastWindowState})");
                 }
             };
 
+            // 常駐の閉じる処理
+            {
+                FormClosingEventHandler? closing = null;
+                closing =  delegate(object sender, FormClosingEventArgs e) {
+                    if (e.CloseReason == CloseReason.UserClosing) {
+                        e.Cancel = true;
+                        this.Hide();
+                        Log.Info($"this.FormClosing() cancle closing. CloseReason({e.CloseReason})");
+                    } else {
+                        this.FormClosing -= closing;
+                        Log.Info($"this.FormClosing() detach closing hook and start exiting. CloseReason({e.CloseReason})");
+                    }
+                };
+                this.FormClosing += closing;
+            }
+
+            this._lastWindowState = this.WindowState;
             this.ResumeLayout(false);
         }
 
@@ -570,9 +624,15 @@ namespace numrnr {
             if(config == null) {
                 this.toolStripMenuItemModeIsUpdateStateMemory.Checked = false;
                 this.toolStripMenuItemModeIsSyncNumlockLastState.Checked = false;
+                foreach(Label label in this.labelNumlockMemoryLock) {
+                    label.Visible = false;
+                }
             } else {
                 this.toolStripMenuItemModeIsUpdateStateMemory.Checked = config.IsUpdateStateMemory;
                 this.toolStripMenuItemModeIsSyncNumlockLastState.Checked = config.IsSyncNumlockLastState;
+                foreach(Label label in this.labelNumlockMemoryLock) {
+                    label.Visible = !config.IsUpdateStateMemory;
+                }
             }
             this._config = config;
          }
@@ -580,8 +640,9 @@ namespace numrnr {
         /// <summary>
         /// スレッド セーフな履歴表示更新
         /// </summary>
-        public void UpdateHistories(Dictionary<string, bool> numlockStateDict) {
+        public void UpdateHistories(string? lastHardwareId, Dictionary<string, bool> numlockStateDict) {
             lock(this._lockObj) {
+                this._cacheLastDeviceHardwareId = lastHardwareId;
                 this._cacheNumlockStateDict.Clear();
                 foreach (KeyValuePair<string, bool> item in numlockStateDict) {
                     this._cacheNumlockStateDict[item.Key] = item.Value;
@@ -604,30 +665,43 @@ namespace numrnr {
         private void UpdateControls() {
             try {
                 lock(this._lockObj) {
+                    // Numlock State Memories
                     {
                         int i = 0;
                         foreach(KeyValuePair<string, bool> item in _cacheNumlockStateDict) {
                             if(i < MAX_MEMORIES) {
                                 string hardwareId = item.Key;
                                 bool isNumlockOn = item.Value;
-                                this.textBoxMemoryDevices[i].Text = $"{hardwareId}";
-                                this.textBoxMemoryStatus[i].Text = $"{isNumlockOn}";
+                                this.textBoxNumlockMemoryDevices[i].Text = $"{hardwareId}";
+                                this.textBoxNumlockMemoryStatus[i].Text = $"{isNumlockOn}";
+                                this.labelNumlockMemoryCurs[i].Visible = string.Equals(this._cacheLastDeviceHardwareId ?? "", hardwareId);
                                 i++;
                             } else {
                                 break;
                             }
                         }
                         for(; i < MAX_MEMORIES; i++) {
-                            this.textBoxMemoryDevices[i].Text = "";
-                            this.textBoxMemoryStatus[i].Text = "";
+                            this.labelNumlockMemoryCurs[i].Visible = false;
+                            this.textBoxNumlockMemoryDevices[i].Text = "";
+                            this.textBoxNumlockMemoryStatus[i].Text = "";
                         }
                     }
-                    //
+                    // Activity Logs
                     this.textBoxLog.Lines = this._cacheLogLineList.ToArray();
                 }
             } catch(Exception ex) {
                 Log.Info($"[EX] UpdateControls", ex);
             }
+        }
+
+        public void Minimize() {
+            this.WindowState = FormWindowState.Minimized;
+        }
+
+        public void Restore() {
+            this.Show();
+            this.WindowState = this._lastWindowState;
+            this.Activate();
         }
     }
 
@@ -645,7 +719,7 @@ namespace numrnr {
             this.IsSyncNumlockLastState = true;
         }
 
-        public static Config Load(string path) {
+        public static Config? Load(string path) {
             using(FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             using(StreamReader reader = new StreamReader(stream, Encoding.UTF8)) {
                 XmlSerializer serializer = new XmlSerializer(typeof(Config));
@@ -657,9 +731,14 @@ namespace numrnr {
             try {
                 if(File.Exists(path)) {
                     Log.Info($"\"{path}\" is found!");
-                    Config config = Load(path);
-                    Log.Info($"loaded.");
-                    return config;
+                    Config? config = Load(path);
+                    if(config != null) {
+                        Log.Info($"loaded.");
+                        return config;
+                    } else {
+                        Log.Info($"\"{path}\" is null...");
+                        return new Config();
+                    }
                 } else {
                     Log.Info($"\"{path}\" is not found...");
                     return new Config();
@@ -850,9 +929,9 @@ namespace numrnr {
                             }
                             this._lastDeviceHardwareId = hardwareId;
                         }
+                        // update
+                        this.controlPanelForm.UpdateHistories(this._lastDeviceHardwareId, this._numlockStateDict);
                     }
-                    // update
-                    this.controlPanelForm.UpdateHistories(this._numlockStateDict);
                 } catch (Exception ex) {
                     Log.Info($"[EX] OnDeviceInput", ex);
                 }
@@ -867,7 +946,7 @@ namespace numrnr {
             } catch (Exception ex) {
                 Log.Info($"[EX] LoadToDictionary", ex);
             } finally {
-                this.controlPanelForm.UpdateHistories(this._numlockStateDict);
+                this.controlPanelForm.UpdateHistories(this._lastDeviceHardwareId, this._numlockStateDict);
             }
         }
 
@@ -883,7 +962,10 @@ namespace numrnr {
         /// (実行ファイルから取得).
         /// </summary>
         static string GetConfigFileFullpath() {
-            return Path.ChangeExtension(Application.ExecutablePath, ".config");
+            string exePath = Application.ExecutablePath;
+            string dirPath = Path.GetDirectoryName(exePath);
+            string baseFname = Path.GetFileNameWithoutExtension(exePath);
+            return Path.Combine(dirPath, $".{baseFname}.config");
         }
 
         /// <summary>
@@ -957,7 +1039,7 @@ namespace numrnr {
                 // $3: '=' とその前後の空白
                 // $4: 既存の Value
                 // $5: 行末のコメントや空白
-                Regex parserRegex = new Regex(@"^(\s*)([^\s=#;]+)(\s*=\s*)([^\s#;]+)(.*)$", RegexOptions.IgnoreCase);
+                Regex parserRegex = new Regex(@"^(\s*)([^=]+?)(\s*=\s*)([^\s#;]+)(.*)$", RegexOptions.IgnoreCase);
                 foreach(KeyValuePair<string, bool> item in dict) {
                     string key = item.Key;
                     bool val = item.Value;
@@ -1004,10 +1086,11 @@ namespace numrnr {
         /// </summary>
         private void ToggleControlPanelForm() {
             if(this.controlPanelForm.Visible) {
-                this.controlPanelForm.Hide();
+                this.controlPanelForm.Minimize();
+                Log.Info($"minimize controlPanelForm.");
             } else {
-                this.controlPanelForm.Show();
-                this.controlPanelForm.Activate();
+                this.controlPanelForm.Restore();
+                Log.Info($"restore controlPanelForm.");
             }
         }
 
