@@ -378,8 +378,8 @@ namespace numrnr {
         private ToolStripMenuItem toolStripMenuItemFile;
         private ToolStripMenuItem toolStripMenuItemFileMnimize;
         private ToolStripMenuItem toolStripMenuItemMode;
-        private ToolStripMenuItem toolStripMenuItemModeIsUpdateStateMemory;
         private ToolStripMenuItem toolStripMenuItemModeIsSyncNumlockLastState;
+        private ToolStripMenuItem toolStripMenuItemModeIsUpdateStateMemory;
         private ToolStripMenuItem toolStripMenuItemView;
         private ToolStripMenuItem toolStripMenuItemViewTopmost;
         private ToolStripMenuItem toolStripMenuItemDebug;
@@ -435,23 +435,12 @@ namespace numrnr {
 
             this.toolStripMenuItemMode = new ToolStripMenuItem("Mode (&M)");
             this.toolStripMenuItemModeIsUpdateStateMemory = new ToolStripMenuItem("Update State (&U)", null, delegate(object sender, EventArgs e) {
-                Log.Info("toolStripMenuItemModeIsUpdateStateMemory => Update State Mode Change.");
+                Log.Info("toolStripMenuItemModeIsUpdateStateMemory => Update State Mode Change on Input Key.");
                 if((this._config != null) && (this.toolStripMenuItemModeIsUpdateStateMemory != null)) {
                     this.toolStripMenuItemModeIsUpdateStateMemory.Checked = !this.toolStripMenuItemModeIsUpdateStateMemory.Checked;
                 }
             });
-            this.toolStripMenuItemModeIsUpdateStateMemory.CheckedChanged += delegate(object sender, EventArgs e) {
-                bool flg = toolStripMenuItemModeIsUpdateStateMemory.Checked;
-                Log.Info($"toolStripMenuItemModeIsUpdateStateMemory.Checked ({flg})=> _config.IsUpdateStateMemory");
-                if(this._config != null) {
-                    this._config.IsUpdateStateMemory = flg;
-                    foreach(Label label in this.labelNumlockMemoryLock) {
-                        label.Visible = !flg;
-                    }
-                }
-            };
-            this.toolStripMenuItemMode.DropDownItems.Add(this.toolStripMenuItemModeIsUpdateStateMemory);
-            this.toolStripMenuItemModeIsSyncNumlockLastState = new ToolStripMenuItem("Sync Numlock LastState (&S)", null, delegate(object sender, EventArgs e) {
+            this.toolStripMenuItemModeIsSyncNumlockLastState = new ToolStripMenuItem("Sync Numlock LastState on Keybord Chaged(&S)", null, delegate(object sender, EventArgs e) {
                 Log.Info("toolStripMenuItemModeIsUpdateStateMemory => Sync Numlock Last State Mode Change.");
                 if((this._config != null) && (this.toolStripMenuItemModeIsSyncNumlockLastState != null)) {
                     this.toolStripMenuItemModeIsSyncNumlockLastState.Checked = !this.toolStripMenuItemModeIsSyncNumlockLastState.Checked;
@@ -465,6 +454,17 @@ namespace numrnr {
                 }
             };
             this.toolStripMenuItemMode.DropDownItems.Add(this.toolStripMenuItemModeIsSyncNumlockLastState);
+            this.toolStripMenuItemModeIsUpdateStateMemory.CheckedChanged += delegate(object sender, EventArgs e) {
+                bool flg = toolStripMenuItemModeIsUpdateStateMemory.Checked;
+                Log.Info($"toolStripMenuItemModeIsUpdateStateMemory.Checked ({flg})=> _config.IsUpdateStateMemory");
+                if(this._config != null) {
+                    this._config.IsUpdateStateMemory = flg;
+                    foreach(Label label in this.labelNumlockMemoryLock) {
+                        label.Visible = !flg;
+                    }
+                }
+            };
+            this.toolStripMenuItemMode.DropDownItems.Add(this.toolStripMenuItemModeIsUpdateStateMemory);
 
             this.toolStripMenuItemView = new ToolStripMenuItem("View (&V)");
             this.toolStripMenuItemViewTopmost = new ToolStripMenuItem("Top Most (&T)", null, delegate(object sender, EventArgs e) {
@@ -711,8 +711,8 @@ namespace numrnr {
     [XmlRoot("NumrnrConfig")]
     public class Config {
         private static readonly ConsoleLogger Log = new ConsoleLogger(typeof(Config));
-        public bool IsUpdateStateMemory{get; set;}
         public bool IsSyncNumlockLastState{get; set;}
+        public bool IsUpdateStateMemory{get; set;}
 
         public Config () {
             this.IsUpdateStateMemory = true;
