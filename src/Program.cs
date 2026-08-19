@@ -882,24 +882,28 @@ namespace numrnr {
                 this.contextMenuStrip.Items.Add(this.toolStripMenuItemControlPanel);
                 this.contextMenuStrip.Items.Add(this.toolStripMenuItemAbout);
                 this.contextMenuStrip.Items.Add(this.toolStripMenuItemExit);
+
+                UpdateTrayState();
             }
             this.contextMenuStrip.ResumeLayout(false);
 
             this._rawInputReceiver = new RawInputReceiver();
             this._rawInputReceiver.OnDeviceInput += delegate(IntPtr hDevice, ushort vkey, uint message, IntPtr extraInfo) {
                 try {
+                    bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
                     if (extraInfo != Win32Api.INSIGNIA_REINJECT) {
+                        bool fixIsNumLockOn = curIsNumLockOn;
                         string hardwareId = DeviceManager.GetHardwareIdFix(hDevice);
-                        bool isChagedDevice = this._isChagedDevice = (_lastDeviceHardwareId != null) && (_lastDeviceHardwareId != hardwareId);
-                        bool curIsNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+                        bool isChagedDevice = this._isChagedDevice = (this._lastDeviceHardwareId == null) || (this._lastDeviceHardwareId != hardwareId);
                         if(vkey == Win32Api.VK_NUMLOCK) {
                             if (message == Win32Api.WM_KEYDOWN) {
+                                fixIsNumLockOn = !curIsNumLockOn;
                                 if(this._config?.IsUpdateStateMemory ?? false) {
-                                    // NUM LOCKが押下されたので、先読み
-                                    this._numlockStateDict[hardwareId] = !curIsNumLockOn;
+                                    this._numlockStateDict[hardwareId] = fixIsNumLockOn;
+                                    this.controlPanelForm.AppendLog($"pre action!");
                                 }
                                 this._lastDeviceHardwareId = hardwareId;
-                                this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {!curIsNumLockOn}, hasContains:{this._numlockStateDict.ContainsKey(hardwareId)}");
+                                this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn} => {fixIsNumLockOn}, hasContains:{this._numlockStateDict.ContainsKey(hardwareId)}");
                             }
                         } else {
                             this.controlPanelForm.AppendLog($"[WM_INPUT] Dev: {hardwareId}, numLock: {curIsNumLockOn}, isChagedDevice: {isChagedDevice}, hasContains:{this._numlockStateDict.ContainsKey(hardwareId)}");
@@ -915,7 +919,7 @@ namespace numrnr {
                                             int errorCode = Common.SafeToggleNumLock();
                                             this.controlPanelForm.AppendLog($"toggle num lock! errorCode({errorCode})");
 
-                                            curIsNumLockOn = expectedIsNumLockOn;
+                                            fixIsNumLockOn = expectedIsNumLockOn;
                                         }
                                     } else {
                                         this.controlPanelForm.AppendLog($"nop (samed)");
@@ -925,13 +929,15 @@ namespace numrnr {
                                 }
                             }
                             if(this._config?.IsUpdateStateMemory ?? false) {
-                                this._numlockStateDict[hardwareId] = curIsNumLockOn;
+                                this._numlockStateDict[hardwareId] = fixIsNumLockOn;
                             }
                             this._lastDeviceHardwareId = hardwareId;
                         }
                         // update
                         this.controlPanelForm.UpdateHistories(this._lastDeviceHardwareId, this._numlockStateDict);
+                        this.UpdateTrayState();
                     }
+
                 } catch (Exception ex) {
                     Log.Info($"[EX] OnDeviceInput", ex);
                 }
@@ -974,6 +980,30 @@ namespace numrnr {
         /// </summary>
         static string GetSettingFileFullpath() {
             return Path.ChangeExtension(Application.ExecutablePath, ".properties");
+        }
+
+        /// <summary>
+        /// タスクトレイを更新.
+        /// </summary>
+        public void UpdateTrayState() {
+            bool isNumLockOn = (Win32Api.GetKeyState(Win32Api.VK_NUMLOCK) & 0x0001) != 0;
+            Icon icon;
+            String strNumLockStatus, tooltip;
+
+            // TODO: アイコン未作成
+            if(isNumLockOn) {
+                icon = SystemIcons.Information;
+                strNumLockStatus = "On";
+            } else {
+                icon = SystemIcons.Hand;
+                strNumLockStatus = "Off";
+            }
+            tooltip = $"{Constants.APP_NAME} - Num Lock {strNumLockStatus}";
+
+            if((this.notifyIcon.Icon != icon) || (this.notifyIcon.Text != tooltip)) {
+                this.notifyIcon.Icon = icon;
+                this.notifyIcon.Text = tooltip;
+            }
         }
 
         /// <summary>
