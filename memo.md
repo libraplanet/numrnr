@@ -74,7 +74,7 @@ import分くらい自分で書け。
 
 ## 開発
 
-### build
+### build (debug build)
 
 ```
 dotnet build
@@ -82,12 +82,20 @@ dotnet build --configuration Debug
 dotnet build -c Debug
 ```
 
-### publish
+### release build
 
 ```
 dotnet build --configuration Release
 dotnet build -c Release
 ```
+
+### run
+
+```
+dotnet run
+dotnet run -c Release
+```
+
 
 ### publish
 
