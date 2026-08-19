@@ -4,6 +4,8 @@
 
 Numlockと踊れ。
 
+![Control Panel](https://github.com/user-attachments/assets/243c5837-f3f5-42f8-b545-fee4825c86ef)
+
 ## **概要および特徴**
 
 * **システム トレイ常駐型アプリケーション**  
